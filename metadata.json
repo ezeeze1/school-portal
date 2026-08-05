@@ -1,0 +1,6 @@
+{
+  "name": "DIVINE ACADEMY SECONDARY SCHOOL Portal",
+  "description": "Comprehensive school portal and management system for DIVINE ACADEMY SECONDARY SCHOOL featuring public website, student, teacher, parent, and admin portals, CBT online exams, and printable report cards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
