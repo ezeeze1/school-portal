@@ -81,18 +81,15 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
 
                       <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                         {pastAttempt ? (
-                          <div className="flex items-center gap-2 text-xs">
+                          <div className="flex items-center justify-between w-full text-xs">
                             <span className={`font-bold px-2.5 py-1 rounded-full ${
                               pastAttempt.passed ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
                             }`}>
                               Completed: {pastAttempt.percentage}%
                             </span>
-                            <button
-                              onClick={() => setActiveExam(exam)}
-                              className="text-amber-600 font-bold hover:underline text-xs"
-                            >
-                              Retake / Review
-                            </button>
+                            <span className="text-slate-400 dark:text-slate-500 font-semibold italic flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Submitted
+                            </span>
                           </div>
                         ) : (
                           <button

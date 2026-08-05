@@ -137,14 +137,6 @@ export const ParentPortalLayout: React.FC = () => {
             <p className="flex justify-between">
               <span>Academic Status:</span> <strong className="text-emerald-600">{selectedStudent.status}</strong>
             </p>
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-              <p className="flex justify-between items-center text-[11px]">
-                <span className="font-semibold text-slate-500">Result Passcode:</span>
-                <span className="font-mono font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-800">
-                  {officialPasscode}
-                </span>
-              </p>
-            </div>
           </div>
         </div>
 
@@ -217,36 +209,18 @@ export const ParentPortalLayout: React.FC = () => {
                   </button>
                 </form>
 
-                {/* Shared Passcode Helper */}
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-700/60 space-y-1.5 text-xs">
-                  <p className="text-[11px] text-slate-400 font-medium">Ward's Official Result Passcode:</p>
-                  <div className="inline-flex items-center gap-2 bg-white dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <span className="font-mono font-bold text-amber-600 dark:text-amber-400 text-xs tracking-widest">{officialPasscode}</span>
-                    <button
-                      type="button"
-                      onClick={handleUseDemoCode}
-                      className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline px-1.5 py-0.5 bg-blue-50 dark:bg-blue-950 rounded"
-                    >
-                      Auto-fill
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyCode}
-                      className="text-[10px] font-bold text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                      title="Copy passcode"
-                    >
-                      {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                    </button>
+                  {/* Info note about missing passcode */}
+                  <div className="pt-3 border-t border-slate-200 dark:border-slate-700/60 text-center text-[10px] text-slate-400 italic">
+                    Lost your passcode? Please contact the school administration or bursar.
                   </div>
                 </div>
-              </div>
             ) : latestResult ? (
               <div className="space-y-4">
                 {/* Verified Ribbon */}
                 <div className="flex justify-between items-center bg-emerald-50 dark:bg-emerald-950/40 p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/50 text-xs">
                   <span className="text-emerald-800 dark:text-emerald-300 font-bold flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    Terminal Result Verified with Passcode ({officialPasscode})
+                    Terminal Result Access Verified
                   </span>
                   <button
                     onClick={handleLockResult}

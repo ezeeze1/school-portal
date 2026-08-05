@@ -14,10 +14,132 @@ import {
   UserCheck,
   AlertCircle,
   BarChart2,
+  Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 
+// Interactive Spell Checker dictionary for CBT Questions
+const COMMON_DICTIONARY = [
+  "what", "where", "when", "how", "which", "who", "why", "whose", "whom", "the", "and", "but", "for", "nor", "yet", "so", "with", "about", "against", "between", "into", "through", "during", "before", "after", "above", "below", "from", "down", "over", "under", "again", "further", "then", "once", "here", "there", "both", "each", "few", "more", "most", "other", "some", "such", "than", "too", "very", "can", "will", "just", "should", "would", "could", "following", "correct", "incorrect", "question", "option", "answer", "explanation", "calculate", "solve", "identify", "determine", "select", "choose", "example", "definition", "concept", "meaning", "structure", "function", "system", "process", "result", "difference", "similar", "opposite", "equal", "greater", "less", "value", "number", "integer", "fraction", "decimal", "percentage", "ratio", "proportion", "algebra", "geometry", "calculus", "matrix", "vector", "probability", "statistics", "equation", "formula", "variable", "coefficient", "exponent", "polynomial", "root", "power", "sum", "difference", "product", "quotient", "remainder", "triangle", "circle", "square", "rectangle", "polygon", "angle", "degree", "radian", "perimeter", "area", "volume", "surface", "theorem", "proof", "science", "biology", "physics", "chemistry", "element", "atom", "molecule", "compound", "reaction", "energy", "force", "mass", "weight", "gravity", "motion", "speed", "velocity", "acceleration", "temperature", "pressure", "volume", "density", "state", "matter", "solid", "liquid", "gas", "plasma", "cell", "organism", "plant", "animal", "human", "organ", "tissue", "gene", "chromosome", "evolution", "ecology", "environment", "history", "geography", "government", "politics", "economy", "society", "culture", "language", "grammar", "spelling", "vocabulary", "sentence", "paragraph", "essay", "literature", "poetry", "drama", "novel", "author", "character", "theme", "plot", "setting", "conflict", "resolution", "analysis", "interpretation", "criticism", "evaluation", "synthesis", "application", "comprehension", "knowledge", "understanding", "cognitive", "affective", "psychomotor", "domain", "taxonomy", "objective", "assessment", "evaluation", "measurement", "test", "quiz", "examination", "instruction", "curriculum", "syllabus", "pedagogy", "methodology", "technique", "strategy", "resource", "material", "activity", "assignment", "project", "homework", "feedback", "grade", "score", "performance", "achievement", "progress", "development", "growth", "learning", "teaching", "education", "school", "academy", "college", "university", "classroom", "laboratory", "library", "office", "staff", "teacher", "student", "parent", "guardian", "principal", "administrator", "director", "coordinator", "supervisor", "counselor", "librarian", "secretary", "clerk", "bursar", "accountant", "registrar", "officer", "manager", "leader", "expert", "professional", "specialist", "consultant", "advisor", "mentor", "tutor", "coach", "instructor", "facilitator", "trainer"
+];
+
+function getLevenshteinDistance(a: string, b: string): number {
+  const matrix = Array.from({ length: a.length + 1 }, () =>
+    Array(b.length + 1).fill(0)
+  );
+  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+interface SpellingHelperProps {
+  text: string;
+  onCorrect: (newText: string) => void;
+}
+
+const CBTQuestionSpellingHelper: React.FC<SpellingHelperProps> = ({ text, onCorrect }) => {
+  const [ignoredWords, setIgnoredWords] = React.useState<string[]>([]);
+
+  if (!text) return null;
+
+  // Split into words, remove punctuation but keep inner hyphens or apostrophes
+  const words = text
+    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"]/g, " ")
+    .split(/\s+/)
+    .map(w => w.trim())
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w));
+
+  const uniqueWords = Array.from(new Set<string>(words));
+  const misspelled: { word: string; suggestions: string[] }[] = [];
+
+  uniqueWords.forEach((w: string) => {
+    const lowerWord = w.toLowerCase();
+    // Skip if starts with uppercase (assuming proper nouns) or ignored
+    if (ignoredWords.includes(lowerWord) || w[0] === w[0].toUpperCase()) {
+      return;
+    }
+
+    // Check if in dictionary
+    if (!COMMON_DICTIONARY.includes(lowerWord)) {
+      // Find suggestions
+      const suggestions = COMMON_DICTIONARY.filter(dictWord => {
+        const dist = getLevenshteinDistance(lowerWord, dictWord);
+        return dist <= 2; // Close suggestions
+      }).slice(0, 3); // Max 3 suggestions
+
+      misspelled.push({ word: w, suggestions });
+    }
+  });
+
+  if (misspelled.length === 0) return null;
+
+  const replaceWord = (oldWord: string, newWord: string) => {
+    // Replace whole word while preserving case or matching exactly
+    const regex = new RegExp(`\\b${oldWord}\\b`, 'g');
+    const updatedText = text.replace(regex, newWord);
+    onCorrect(updatedText);
+  };
+
+  const handleIgnore = (word: string) => {
+    setIgnoredWords(prev => [...prev, word.toLowerCase()]);
+  };
+
+  return (
+    <div className="mt-2 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/20 rounded-xl p-3 space-y-2 text-xs">
+      <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-bold">
+        <Sparkles className="w-3.5 h-3.5 animate-pulse text-amber-500" />
+        <span>Spelling Assistant suggestions:</span>
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {misspelled.map(({ word, suggestions }) => (
+          <div key={word} className="flex flex-wrap items-center gap-1.5 bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
+            <span className="font-bold text-red-500 dark:text-red-400 underline decoration-wavy decoration-red-500">{word}</span>
+            <span className="text-slate-400">→</span>
+            {suggestions.length > 0 ? (
+              <div className="flex gap-1">
+                {suggestions.map(sug => (
+                  <button
+                    key={sug}
+                    type="button"
+                    onClick={() => replaceWord(word, sug)}
+                    className="px-1.5 py-0.5 bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 rounded font-semibold hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors"
+                  >
+                    {sug}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="text-slate-400 italic">No suggestion</span>
+            )}
+            <button
+              type="button"
+              onClick={() => handleIgnore(word)}
+              className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 font-medium ml-1 hover:underline"
+            >
+              Ignore
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export const CBTQuestionBankBuilder: React.FC = () => {
-  const { cbtExams, cbtAttempts, createCBTExam, updateCBTExam, deleteCBTExam, deleteMultipleCBTExams, classes, subjects } = useSchool();
+  const { cbtExams, cbtAttempts, createCBTExam, updateCBTExam, deleteCBTExam, deleteMultipleCBTExams, deleteCBTAttempt, classes, subjects } = useSchool();
   const [activeTab, setActiveTab] = useState<'list' | 'create' | 'import'>('list');
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
 
@@ -505,12 +627,18 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                   </button>
                 </div>
 
-                <input
-                  type="text"
+                <textarea
+                  rows={2}
                   value={q.question}
                   onChange={(e) => handleUpdateQuestion(idx, { question: e.target.value })}
-                  className="w-full p-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+                  className="w-full p-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium resize-y outline-none focus:ring-2 focus:ring-amber-500/20"
                   placeholder="Enter question text..."
+                  spellCheck={true}
+                />
+
+                <CBTQuestionSpellingHelper
+                  text={q.question}
+                  onCorrect={(newText) => handleUpdateQuestion(idx, { question: newText })}
                 />
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -526,6 +654,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                           })
                         }
                         className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
+                        spellCheck={true}
                       />
                     </div>
                   ))}
@@ -747,12 +876,19 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                               <td className="p-3.5 text-slate-500">
                                 {new Date(att.completedAt).toLocaleDateString()} {new Date(att.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </td>
-                              <td className="p-3.5 text-right">
+                              <td className="p-3.5 text-right flex justify-end gap-2 items-center">
                                 <button
                                   onClick={() => setViewingStudentScript(att)}
-                                  className="px-3 py-1.5 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold rounded-lg text-[11px] hover:opacity-90 transition-opacity"
+                                  className="px-3 py-1.5 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold rounded-lg text-[11px] hover:opacity-90 transition-opacity whitespace-nowrap"
                                 >
                                   View Script
+                                </button>
+                                <button
+                                  onClick={() => deleteCBTAttempt(att.id)}
+                                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-[11px] flex items-center gap-1 transition-colors whitespace-nowrap"
+                                  title="Reset student attempt to allow retake"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" /> Allow Retake
                                 </button>
                               </td>
                             </tr>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { UserRole } from '../../types';
-import { X, ArrowRight, ChevronDown } from 'lucide-react';
+import { X, ArrowRight, ChevronDown, AlertCircle } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -40,19 +40,18 @@ const getCredentialsForRole = (role: UserRole) => {
 };
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, defaultRole = 'student' }) => {
-  const { switchRole } = useSchool();
+  const { switchRole, students, teachers } = useSchool();
   const [selectedRole, setSelectedRole] = useState<UserRole>(defaultRole);
-  
-  const initialCreds = getCredentialsForRole(defaultRole as UserRole);
-  const [email, setEmail] = useState(initialCreds.email);
-  const [password, setPassword] = useState(initialCreds.password);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     if (isOpen) {
-      const creds = getCredentialsForRole(defaultRole as UserRole);
-      setEmail(creds.email);
-      setPassword(creds.password);
+      setEmail('');
+      setPassword('');
       setSelectedRole(defaultRole);
+      setErrorMsg('');
     }
   }, [isOpen, defaultRole]);
 
@@ -60,32 +59,76 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
 
   const handleEmailChange = (val: string) => {
     setEmail(val);
+    setErrorMsg('');
     const role = detectRoleFromEmail(val);
     setSelectedRole(role);
-
-    // Auto-update default password if standard email is fully entered and password was default
-    if (val === 'ezekielsamson1@gmail.com') {
-      setPassword('sezuo2020');
-    } else if (
-      val === 'david.adams@divineacademy.edu' ||
-      val === 'david.adeleke@student.divineacademy.edu' ||
-      val === 'parent.adeleke@gmail.com'
-    ) {
-      setPassword('password123');
-    }
   };
 
   const handleRoleSelect = (role: UserRole) => {
     setSelectedRole(role);
-    const creds = getCredentialsForRole(role);
-    setEmail(creds.email);
-    setPassword(creds.password);
+    setErrorMsg('');
   };
 
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    switchRole(selectedRole);
-    onClose();
+    setErrorMsg('');
+
+    const inputUser = email.trim().toLowerCase();
+    const inputPass = password.trim();
+
+    if (selectedRole === 'admin') {
+      if (inputUser === 'ezekielsamson1@gmail.com' && inputPass === 'sezuo2020') {
+        switchRole('admin');
+        onClose();
+      } else {
+        setErrorMsg('Invalid Administrator email address or password!');
+      }
+    } else if (selectedRole === 'teacher') {
+      const matchedTeacher = teachers.find(
+        (t) => t.email.toLowerCase() === inputUser || t.staffId.toLowerCase() === inputUser
+      );
+      
+      const isValidDefault = inputUser === 'david.adams@divineacademy.edu' && (inputPass === 'password123' || inputPass === 'teacherpass123');
+      const isValidSaved = matchedTeacher && (matchedTeacher.password === inputPass || inputPass === 'password123' || inputPass === 'teacherpass123');
+
+      if (isValidDefault || isValidSaved) {
+        switchRole('teacher');
+        onClose();
+      } else {
+        setErrorMsg('Invalid Teacher Email, Staff ID, or Password!');
+      }
+    } else if (selectedRole === 'student') {
+      const matchedStudent = students.find((s) => {
+        const admissionNoMatch = s.admissionNo?.toLowerCase() === inputUser;
+        const generatedEmail = `${s.firstName?.toLowerCase()}.${s.lastName?.toLowerCase()}@student.divineacademy.edu`;
+        const emailMatch = generatedEmail === inputUser || (s as any).email?.toLowerCase() === inputUser;
+        return admissionNoMatch || emailMatch;
+      });
+
+      const isValidDefault = inputUser === 'david.adeleke@student.divineacademy.edu' && (inputPass === 'password123' || inputPass === 'student123');
+      const isValidSaved = matchedStudent && (matchedStudent.password === inputPass || inputPass === 'password123' || inputPass === 'student123');
+
+      if (isValidDefault || isValidSaved) {
+        switchRole('student');
+        onClose();
+      } else {
+        setErrorMsg('Invalid Student Admission Number, Email, or Password!');
+      }
+    } else if (selectedRole === 'parent') {
+      const matchedStudentWithParent = students.find(
+        (s) => s.parentEmail?.toLowerCase() === inputUser
+      );
+
+      const isValidDefault = inputUser === 'parent.adeleke@gmail.com' && inputPass === 'password123';
+      const isValidSaved = matchedStudentWithParent && (inputPass === 'password123' || inputPass === 'student123');
+
+      if (isValidDefault || isValidSaved) {
+        switchRole('parent');
+        onClose();
+      } else {
+        setErrorMsg('Invalid Parent Email Address or Password!');
+      }
+    }
   };
 
   return (
@@ -117,6 +160,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
           
           {/* Login Form */}
           <form onSubmit={handleLoginSubmit} className="space-y-4">
+            {errorMsg && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl flex items-center gap-2.5 text-xs text-red-600 dark:text-red-400 font-bold animate-bounce">
+                <AlertCircle className="w-4.5 h-4.5 text-red-500 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Select Portal Type / Account Role
@@ -192,6 +241,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
                       setEmail('ezekielsamson1@gmail.com');
                       setPassword('sezuo2020');
                       setSelectedRole('admin');
+                      setErrorMsg('');
                     }}
                     className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
                   >
@@ -205,6 +255,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
                       setEmail('david.adams@divineacademy.edu');
                       setPassword('password123');
                       setSelectedRole('teacher');
+                      setErrorMsg('');
                     }}
                     className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
                   >
@@ -218,6 +269,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
                       setEmail('david.adeleke@student.divineacademy.edu');
                       setPassword('password123');
                       setSelectedRole('student');
+                      setErrorMsg('');
                     }}
                     className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
                   >
@@ -231,6 +283,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
                       setEmail('parent.adeleke@gmail.com');
                       setPassword('password123');
                       setSelectedRole('parent');
+                      setErrorMsg('');
                     }}
                     className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
                   >

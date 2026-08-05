@@ -116,6 +116,7 @@ interface SchoolContextType {
   deleteCBTExam: (id: string) => void;
   deleteMultipleCBTExams: (ids: string[]) => void;
   submitCBTAttempt: (attempt: Omit<CBTAttempt, 'id'>) => void;
+  deleteCBTAttempt: (id: string) => void;
 
   // Assignments & Notes
   createAssignment: (asg: Omit<Assignment, 'id'>) => void;
@@ -454,6 +455,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCbtAttempts((prev) => [...prev, { ...attempt, id }]);
   };
 
+  const deleteCBTAttempt = (id: string) => {
+    setCbtAttempts((prev) => prev.filter((a) => a.id !== id));
+  };
+
   const createAssignment = (asg: Omit<Assignment, 'id'>) => {
     const id = `asg-${Date.now()}`;
     setAssignments((prev) => [...prev, { ...asg, id }]);
@@ -584,6 +589,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteCBTExam,
         deleteMultipleCBTExams,
         submitCBTAttempt,
+        deleteCBTAttempt,
         createAssignment,
         createStudyNote,
         addNewsItem,
