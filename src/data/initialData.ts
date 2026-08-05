@@ -38,7 +38,7 @@ export const initialSystemSettings: SystemSessionTerm = {
   heroBadge: 'Admissions Open for 2025/2026 Academic Session',
   heroTitle: 'Empowering Minds, Shaping Global Leaders.',
   heroSubtitle: 'Welcome to DIVINE ACADEMY SECONDARY SCHOOL — guided by our motto, "Excellent of Divine Wisdom". Providing world-class STEM education, sound ethical discipline, state-of-the-art CBT testing centers, and holistic student development.',
-  heroImage: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&q=80&w=1000',
+  heroImage: 'https://i.ibb.co/B2GJ0CSS/Divine5.jpg',
   heroSpotlightLabel: 'Campus Spotlight',
   heroSpotlightText: '100% UTME/WAEC Pass Rate',
   heroImageTitle: 'Ultra-Modern Digital CBT Exam Center & Robotics Lab',

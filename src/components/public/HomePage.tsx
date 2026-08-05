@@ -72,7 +72,7 @@ export const HomePage: React.FC = () => {
           <div className="relative mx-auto max-w-lg lg:max-w-none w-full">
             <div className="relative rounded-3xl overflow-hidden shadow-2xl border-4 border-slate-800">
               <img
-                src={systemSettings.heroImage || "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&q=80&w=1000"}
+                src={systemSettings.heroImage || "https://i.ibb.co/B2GJ0CSS/Divine5.jpg"}
                 alt={systemSettings.schoolName || "Divine Academy Students"}
                 referrerPolicy="no-referrer"
                 className="w-full h-80 sm:h-96 lg:h-[440px] object-cover"
