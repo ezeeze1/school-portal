@@ -2,6 +2,7 @@ import React from 'react';
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
+import { WhatsAppButton } from './components/common/WhatsAppButton';
 import { LoginModal } from './components/auth/LoginModal';
 
 // Public Pages
@@ -56,6 +57,9 @@ const MainApp: React.FC = () => {
 
       {/* Footer (shown on public view) */}
       {!activeRole && <Footer />}
+
+      {/* Floating WhatsApp Action Button for Public Site */}
+      {!activeRole && <WhatsAppButton />}
 
       {/* Authentication Login Modal */}
       {showLoginModal && <LoginModal onClose={() => setShowLoginModal(false)} />}

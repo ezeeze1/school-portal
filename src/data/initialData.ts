@@ -31,7 +31,7 @@ export const initialSystemSettings: SystemSessionTerm = {
   schoolName: 'DIVINE ACADEMY SECONDARY SCHOOL',
   schoolMotto: 'Excellent of Divine Wisdom',
   schoolLogoText: 'DA',
-  schoolPhone: '+234 803 111 2233',
+  schoolPhone: '08131817596',
   schoolEmail: 'admissions@divineacademy.edu',
   schoolAddress: 'Divine Academy Lane, Phase II, Abuja, Nigeria',
 
