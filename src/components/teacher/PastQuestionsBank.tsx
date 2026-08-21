@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, CBTQuestion } from '../../types';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import {
   BookOpen,
   Search,
@@ -37,6 +38,7 @@ export const PastQuestionsBank: React.FC = () => {
   const [printingExam, setPrintingExam] = useState<CBTExam | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
 
   // New Past Exam Form State
   const [formTitle, setFormTitle] = useState('');
@@ -496,11 +498,7 @@ export const PastQuestionsBank: React.FC = () => {
                       <Edit3 className="w-3.5 h-3.5" /> Edit Paper
                     </button>
                     <button
-                      onClick={() => {
-                        if (confirm(`Are you sure you want to delete past paper "${exam.title}" from archive?`)) {
-                          deleteCBTExam(exam.id);
-                        }
-                      }}
+                      onClick={() => setExamToDelete(exam)}
                       className="bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all border border-red-100 dark:border-red-900/30"
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Delete Paper
@@ -918,6 +916,20 @@ export const PastQuestionsBank: React.FC = () => {
         </div>
       )}
 
+      {/* Confirmation Modal for Past Paper Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!examToDelete}
+        onClose={() => setExamToDelete(null)}
+        onConfirm={() => {
+          if (examToDelete) {
+            deleteCBTExam(examToDelete.id);
+            setExamToDelete(null);
+          }
+        }}
+        title="Confirm Past Question Paper Deletion"
+        message="Are you sure you want to delete this past question paper from the archive?"
+        itemName={examToDelete ? examToDelete.title : undefined}
+      />
     </div>
   );
 };

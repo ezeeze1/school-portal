@@ -344,7 +344,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCurrentUser((curr) => curr ? {
           ...curr,
           name: next.name || curr.name,
-          email: next.email || next.username || curr.email,
+          email: next.email || curr.email,
         } : null);
       }
       return next;

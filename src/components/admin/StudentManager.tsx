@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
 import { Plus, Trash2, Edit, Search, ShieldCheck, Key, Lock, CheckCircle2, RefreshCw, Copy, Check, Printer, Sparkles } from 'lucide-react';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const StudentManager: React.FC = () => {
   const { students, classes, addStudent, updateStudent, deleteStudent, generateResultPasscodeForStudent, bulkGenerateResultPasscodes } = useSchool();
@@ -11,6 +12,7 @@ export const StudentManager: React.FC = () => {
   const [showPasscodeSlipsModal, setShowPasscodeSlipsModal] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
 
   // Helper generator
   const createAlphanumericCode = () => {
@@ -212,7 +214,9 @@ export const StudentManager: React.FC = () => {
                         <div className="flex items-center gap-2.5">
                           <img src={std.avatar} alt={std.firstName} className="w-9 h-9 rounded-full object-cover border border-slate-200" />
                           <div>
-                            <p className="font-bold text-slate-900 dark:text-white">{std.firstName} {std.lastName}</p>
+                            <p className="font-bold text-slate-900 dark:text-white">
+                              {std.firstName} {std.lastName}
+                            </p>
                             <p className="text-[10px] text-slate-400">{std.gender} • DOB: {std.dob}</p>
                           </div>
                         </div>
@@ -261,7 +265,7 @@ export const StudentManager: React.FC = () => {
                             <Edit className="w-4 h-4" /> Edit
                           </button>
                           <button
-                            onClick={() => deleteStudent(std.id)}
+                            onClick={() => setStudentToDelete(std)}
                             className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-lg transition-colors"
                             title="Delete Record"
                           >
@@ -568,6 +572,21 @@ export const StudentManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal for Student Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!studentToDelete}
+        onClose={() => setStudentToDelete(null)}
+        onConfirm={() => {
+          if (studentToDelete) {
+            deleteStudent(studentToDelete.id);
+            setStudentToDelete(null);
+          }
+        }}
+        title="Confirm Student Profile Deletion"
+        message="Are you sure you want to delete this student profile from the portal? This will permanently remove their records."
+        itemName={studentToDelete ? `${studentToDelete.firstName} ${studentToDelete.lastName} (${studentToDelete.admissionNo})` : undefined}
+      />
 
     </div>
   );

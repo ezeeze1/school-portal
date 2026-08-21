@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, CBTQuestion, CBTAttempt } from '../../types';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import {
   Plus,
   Trash2,
@@ -200,6 +201,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   // Excel / CSV Importer Raw Text State
   const [csvText, setCsvText] = useState('');
   const [importedPreview, setImportedPreview] = useState<CBTQuestion[]>([]);
+  const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
 
   const handleEditExam = (exam: CBTExam) => {
     setEditingExamId(exam.id);
@@ -479,11 +481,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                         </button>
                       </div>
                       <button
-                        onClick={() => {
-                          if (confirm(`Are you sure you want to delete CBT Exam Paper "${exam.title}"? This cannot be undone.`)) {
-                            deleteCBTExam(exam.id);
-                          }
-                        }}
+                        onClick={() => setExamToDelete(exam)}
                         className="w-full bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all border border-red-100 dark:border-red-900/30"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> Delete Exam Paper
@@ -700,11 +698,8 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    if (confirm(`Are you sure you want to delete CBT Exam Paper "${title}"? This cannot be undone.`)) {
-                      deleteCBTExam(editingExamId);
-                      handleCancelEdit();
-                      setActiveTab('list');
-                    }
+                    const ex = cbtExams.find(e => e.id === editingExamId);
+                    if (ex) setExamToDelete(ex);
                   }}
                   className="px-5 py-3.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors shadow-sm"
                 >
@@ -1014,6 +1009,24 @@ export const CBTQuestionBankBuilder: React.FC = () => {
         </div>
       )}
 
+      {/* Confirmation Modal for CBT Exam Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!examToDelete}
+        onClose={() => setExamToDelete(null)}
+        onConfirm={() => {
+          if (examToDelete) {
+            deleteCBTExam(examToDelete.id);
+            if (editingExamId === examToDelete.id) {
+              handleCancelEdit();
+              setActiveTab('list');
+            }
+            setExamToDelete(null);
+          }
+        }}
+        title="Confirm CBT Exam Deletion"
+        message="Are you sure you want to delete this CBT Exam Paper and all associated questions?"
+        itemName={examToDelete ? examToDelete.title : undefined}
+      />
     </div>
   );
 };

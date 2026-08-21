@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Assignment, StudyNote } from '../../types';
 import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileCode, Paperclip, Download, Eye, AlertCircle, Sparkles, Send } from 'lucide-react';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AssignmentsManager: React.FC = () => {
   const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, classes, subjects } = useSchool();
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
+  const [assignmentToDelete, setAssignmentToDelete] = useState<Assignment | null>(null);
 
   // Assignment Form State
   const [asgTitle, setAsgTitle] = useState('');
@@ -429,7 +431,7 @@ export const AssignmentsManager: React.FC = () => {
 
                     {deleteAssignment && (
                       <button
-                        onClick={() => deleteAssignment(asg.id)}
+                        onClick={() => setAssignmentToDelete(asg)}
                         className="text-rose-500 hover:text-rose-700 font-bold flex items-center gap-1 text-[11px]"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> Remove Assignment
@@ -508,6 +510,20 @@ export const AssignmentsManager: React.FC = () => {
         </div>
       )}
 
+      {/* Confirmation Modal for Assignment Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!assignmentToDelete}
+        onClose={() => setAssignmentToDelete(null)}
+        onConfirm={() => {
+          if (assignmentToDelete) {
+            deleteAssignment(assignmentToDelete.id);
+            setAssignmentToDelete(null);
+          }
+        }}
+        title="Confirm Assignment Removal"
+        message="Are you sure you want to delete this homework assignment from the portal?"
+        itemName={assignmentToDelete ? assignmentToDelete.title : undefined}
+      />
     </div>
   );
 };

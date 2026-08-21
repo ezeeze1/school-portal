@@ -79,11 +79,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
     setErrorMsg('');
 
     const inputUser = email.trim().toLowerCase();
+    const cleanUser = inputUser.startsWith('@') ? inputUser.slice(1) : inputUser;
     const inputPass = password.trim();
 
     if (selectedRole === 'admin') {
       const isValidAdminUser =
         inputUser === adminCredentials.username.toLowerCase() ||
+        cleanUser === adminCredentials.username.toLowerCase() ||
         inputUser === adminCredentials.email.toLowerCase() ||
         inputUser === 'ezekielsamson1@gmail.com' ||
         inputUser === 'admin';
@@ -100,39 +102,44 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
       }
     } else if (selectedRole === 'teacher') {
       const matchedTeacher = teachers.find(
-        (t) => t.email.toLowerCase() === inputUser || t.staffId.toLowerCase() === inputUser
+        (t) =>
+          t.email.toLowerCase() === inputUser ||
+          t.staffId.toLowerCase() === inputUser ||
+          t.staffId.toLowerCase() === cleanUser
       );
       
-      const isValidDefault = inputUser === 'david.adams@divineacademy.edu' && (inputPass === 'password123' || inputPass === 'teacherpass123');
+      const isValidDefault = (inputUser === 'david.adams@divineacademy.edu' || inputUser === 'david.adams' || cleanUser === 'david.adams') && (inputPass === 'password123' || inputPass === 'teacherpass123');
       const isValidSaved = matchedTeacher && (matchedTeacher.password === inputPass || inputPass === 'password123' || inputPass === 'teacherpass123');
 
       if (isValidDefault || isValidSaved) {
         switchRole('teacher');
         onClose();
       } else {
-        setErrorMsg('Invalid Teacher Email, Staff ID, or Password!');
+        setErrorMsg('Invalid Teacher Registration No (Staff ID), Email, or Password!');
       }
     } else if (selectedRole === 'student') {
       const matchedStudent = students.find((s) => {
-        const admissionNoMatch = s.admissionNo?.toLowerCase() === inputUser;
+        const admissionNoMatch = s.admissionNo?.toLowerCase() === inputUser || s.admissionNo?.toLowerCase() === cleanUser;
         const generatedEmail = `${s.firstName?.toLowerCase()}.${s.lastName?.toLowerCase()}@student.divineacademy.edu`;
         const emailMatch = generatedEmail === inputUser || (s as any).email?.toLowerCase() === inputUser;
         return admissionNoMatch || emailMatch;
       });
 
-      const isValidDefault = inputUser === 'david.adeleke@student.divineacademy.edu' && (inputPass === 'password123' || inputPass === 'student123');
+      const isValidDefault = (inputUser === 'david.adeleke@student.divineacademy.edu' || inputUser === 'david.adeleke' || cleanUser === 'david.adeleke') && (inputPass === 'password123' || inputPass === 'student123');
       const isValidSaved = matchedStudent && (matchedStudent.password === inputPass || inputPass === 'password123' || inputPass === 'student123');
 
       if (isValidDefault || isValidSaved) {
         switchRole('student');
         onClose();
       } else {
-        setErrorMsg('Invalid Student Admission Number, Email, or Password!');
+        setErrorMsg('Invalid Student Registration No (Admission No), Email, or Password!');
       }
     } else if (selectedRole === 'parent') {
-      const matchedStudentWithParent = students.find(
-        (s) => s.parentEmail?.toLowerCase() === inputUser
-      );
+      const matchedStudentWithParent = students.find((s) => {
+        const emailMatch = s.parentEmail?.toLowerCase() === inputUser;
+        const admissionMatch = s.admissionNo?.toLowerCase() === inputUser || s.admissionNo?.toLowerCase() === cleanUser;
+        return emailMatch || admissionMatch;
+      });
 
       const isValidDefault = inputUser === 'parent.adeleke@gmail.com' && inputPass === 'password123';
       const isValidSaved = matchedStudentWithParent && (inputPass === 'password123' || inputPass === 'student123');
@@ -141,7 +148,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
         switchRole('parent');
         onClose();
       } else {
-        setErrorMsg('Invalid Parent Email Address or Password!');
+        setErrorMsg('Invalid Parent Email, Child Registration No, or Password!');
       }
     }
   };
@@ -203,15 +210,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Portal Identifier or Email Address
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                <span>Registration No (Staff ID / Adm No) or Email</span>
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono font-normal">e.g. TCH/2026/102 or STD/2026/012</span>
               </label>
               <input
                 type="text"
                 required
                 value={email}
                 onChange={(e) => handleEmailChange(e.target.value)}
-                placeholder="Enter registration ID or email"
+                placeholder="Enter Registration No (Staff ID / Adm No) or Email"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
               />
             </div>

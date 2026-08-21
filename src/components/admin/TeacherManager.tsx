@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Teacher } from '../../types';
 import { Plus, Trash2, Edit, Lock, Check, X, BookOpen, GraduationCap } from 'lucide-react';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
+import { MarkDropdownSelect } from '../common/MarkDropdownSelect';
 
 const PRESET_CLASSES = [
   'JSS 1 Gold',
@@ -31,6 +33,7 @@ export const TeacherManager: React.FC = () => {
   const { teachers, addTeacher, updateTeacher, deleteTeacher } = useSchool();
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [teacherToDelete, setTeacherToDelete] = useState<Teacher | null>(null);
 
   // Form state for adding educator
   const [formData, setFormData] = useState({
@@ -236,9 +239,11 @@ export const TeacherManager: React.FC = () => {
                       <h3 className="font-bold text-base text-slate-900 dark:text-white">
                         {teacher.firstName} {teacher.lastName}
                       </h3>
-                      <span className="inline-block mt-0.5 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] text-slate-500 font-mono font-bold">
-                        {teacher.staffId}
-                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] text-slate-500 font-mono font-bold">
+                          {teacher.staffId}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -309,7 +314,7 @@ export const TeacherManager: React.FC = () => {
                   <Edit className="w-3.5 h-3.5" /> Edit
                 </button>
                 <button
-                  onClick={() => deleteTeacher(teacher.id)}
+                  onClick={() => setTeacherToDelete(teacher)}
                   className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-lg transition-colors"
                   title="Delete Teacher Profile"
                 >
@@ -385,142 +390,40 @@ export const TeacherManager: React.FC = () => {
               </div>
             </div>
 
-            {/* Select Multiple Classes Taught */}
-            <div className="space-y-2 bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <label className="block font-bold text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Select Classes Taught * (Select multiple)</span>
-                <span className="text-[10px] text-amber-600 font-bold">{selectedClasses.length} selected</span>
-              </label>
-
-              <div className="flex flex-wrap gap-1.5">
-                {PRESET_CLASSES.map((cls) => {
-                  const isSelected = selectedClasses.includes(cls);
-                  return (
-                    <button
-                      type="button"
-                      key={cls}
-                      onClick={() => toggleClass(cls)}
-                      className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1 text-[11px] ${
-                        isSelected
-                          ? 'bg-amber-500 text-slate-950 shadow-sm border border-amber-400'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-amber-400'
-                      }`}
-                    >
-                      {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : null}
-                      {cls}
-                    </button>
-                  );
-                })}
-
-                {/* Custom classes added */}
-                {selectedClasses
-                  .filter((c) => !PRESET_CLASSES.includes(c))
-                  .map((cls) => (
-                    <button
-                      type="button"
-                      key={cls}
-                      onClick={() => toggleClass(cls)}
-                      className="px-3 py-1.5 rounded-xl font-bold bg-amber-500 text-slate-950 shadow-sm border border-amber-400 transition-all flex items-center gap-1 text-[11px]"
-                    >
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      {cls}
-                      <X className="w-3 h-3 ml-0.5 hover:text-red-900" />
-                    </button>
-                  ))}
-              </div>
-
-              {/* Custom Class Add Input */}
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  value={customClassInput}
-                  onChange={(e) => setCustomClassInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddCustomClass();
-                    }
-                  }}
-                  placeholder="Or type custom class (e.g. SS 3 Emerald)..."
-                  className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddCustomClass}
-                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Class
-                </button>
-              </div>
+            {/* Mark and Dropdown Select: Classes Taught */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <MarkDropdownSelect
+                label="Select Classes Taught"
+                required
+                options={PRESET_CLASSES}
+                selectedValues={selectedClasses}
+                onToggleValue={toggleClass}
+                onAddCustomValue={(customVal) => {
+                  if (!selectedClasses.includes(customVal)) {
+                    setSelectedClasses([...selectedClasses, customVal]);
+                  }
+                }}
+                placeholder="Click to select and mark classes taught..."
+                badgeTheme="amber"
+              />
             </div>
 
-            {/* Select Multiple Subjects Taught */}
-            <div className="space-y-2 bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <label className="block font-bold text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Select Subjects Taught * (Select multiple)</span>
-                <span className="text-[10px] text-blue-600 font-bold">{selectedSubjects.length} selected</span>
-              </label>
-
-              <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto pr-1">
-                {PRESET_SUBJECTS.map((subj) => {
-                  const isSelected = selectedSubjects.includes(subj);
-                  return (
-                    <button
-                      type="button"
-                      key={subj}
-                      onClick={() => toggleSubject(subj)}
-                      className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1 text-[11px] ${
-                        isSelected
-                          ? 'bg-blue-600 text-white shadow-sm border border-blue-500'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-blue-400'
-                      }`}
-                    >
-                      {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : null}
-                      {subj}
-                    </button>
-                  );
-                })}
-
-                {/* Custom subjects added */}
-                {selectedSubjects
-                  .filter((s) => !PRESET_SUBJECTS.includes(s))
-                  .map((subj) => (
-                    <button
-                      type="button"
-                      key={subj}
-                      onClick={() => toggleSubject(subj)}
-                      className="px-3 py-1.5 rounded-xl font-bold bg-blue-600 text-white shadow-sm border border-blue-500 transition-all flex items-center gap-1 text-[11px]"
-                    >
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      {subj}
-                      <X className="w-3 h-3 ml-0.5 hover:text-red-200" />
-                    </button>
-                  ))}
-              </div>
-
-              {/* Custom Subject Add Input */}
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  value={customSubjectInput}
-                  onChange={(e) => setCustomSubjectInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddCustomSubject();
-                    }
-                  }}
-                  placeholder="Or type custom subject..."
-                  className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddCustomSubject}
-                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Subject
-                </button>
-              </div>
+            {/* Mark and Dropdown Select: Subjects Taught */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <MarkDropdownSelect
+                label="Select Subjects Taught"
+                required
+                options={PRESET_SUBJECTS}
+                selectedValues={selectedSubjects}
+                onToggleValue={toggleSubject}
+                onAddCustomValue={(customVal) => {
+                  if (!selectedSubjects.includes(customVal)) {
+                    setSelectedSubjects([...selectedSubjects, customVal]);
+                  }
+                }}
+                placeholder="Click to select and mark subjects taught..."
+                badgeTheme="blue"
+              />
             </div>
 
             {/* Assign Password Input */}
@@ -619,138 +522,40 @@ export const TeacherManager: React.FC = () => {
               </div>
             </div>
 
-            {/* Edit Classes Taught */}
-            <div className="space-y-2 bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <label className="block font-bold text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Classes Taught * (Select multiple)</span>
-                <span className="text-[10px] text-amber-600 font-bold">{editSelectedClasses.length} selected</span>
-              </label>
-
-              <div className="flex flex-wrap gap-1.5">
-                {PRESET_CLASSES.map((cls) => {
-                  const isSelected = editSelectedClasses.includes(cls);
-                  return (
-                    <button
-                      type="button"
-                      key={cls}
-                      onClick={() => toggleEditClass(cls)}
-                      className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1 text-[11px] ${
-                        isSelected
-                          ? 'bg-amber-500 text-slate-950 shadow-sm border border-amber-400'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-amber-400'
-                      }`}
-                    >
-                      {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : null}
-                      {cls}
-                    </button>
-                  );
-                })}
-
-                {editSelectedClasses
-                  .filter((c) => !PRESET_CLASSES.includes(c))
-                  .map((cls) => (
-                    <button
-                      type="button"
-                      key={cls}
-                      onClick={() => toggleEditClass(cls)}
-                      className="px-3 py-1.5 rounded-xl font-bold bg-amber-500 text-slate-950 shadow-sm border border-amber-400 transition-all flex items-center gap-1 text-[11px]"
-                    >
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      {cls}
-                      <X className="w-3 h-3 ml-0.5 hover:text-red-900" />
-                    </button>
-                  ))}
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  value={editCustomClassInput}
-                  onChange={(e) => setEditCustomClassInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleEditAddCustomClass();
-                    }
-                  }}
-                  placeholder="Or type custom class..."
-                  className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={handleEditAddCustomClass}
-                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Class
-                </button>
-              </div>
+            {/* Edit Mark and Dropdown Select: Classes Taught */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <MarkDropdownSelect
+                label="Classes Taught"
+                required
+                options={PRESET_CLASSES}
+                selectedValues={editSelectedClasses}
+                onToggleValue={toggleEditClass}
+                onAddCustomValue={(customVal) => {
+                  if (!editSelectedClasses.includes(customVal)) {
+                    setEditSelectedClasses([...editSelectedClasses, customVal]);
+                  }
+                }}
+                placeholder="Click to select and mark classes taught..."
+                badgeTheme="amber"
+              />
             </div>
 
-            {/* Edit Subjects Taught */}
-            <div className="space-y-2 bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <label className="block font-bold text-slate-900 dark:text-white flex items-center justify-between">
-                <span>Subjects Taught * (Select multiple)</span>
-                <span className="text-[10px] text-blue-600 font-bold">{editSelectedSubjects.length} selected</span>
-              </label>
-
-              <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto pr-1">
-                {PRESET_SUBJECTS.map((subj) => {
-                  const isSelected = editSelectedSubjects.includes(subj);
-                  return (
-                    <button
-                      type="button"
-                      key={subj}
-                      onClick={() => toggleEditSubject(subj)}
-                      className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1 text-[11px] ${
-                        isSelected
-                          ? 'bg-blue-600 text-white shadow-sm border border-blue-500'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-blue-400'
-                      }`}
-                    >
-                      {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : null}
-                      {subj}
-                    </button>
-                  );
-                })}
-
-                {editSelectedSubjects
-                  .filter((s) => !PRESET_SUBJECTS.includes(s))
-                  .map((subj) => (
-                    <button
-                      type="button"
-                      key={subj}
-                      onClick={() => toggleEditSubject(subj)}
-                      className="px-3 py-1.5 rounded-xl font-bold bg-blue-600 text-white shadow-sm border border-blue-500 transition-all flex items-center gap-1 text-[11px]"
-                    >
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
-                      {subj}
-                      <X className="w-3 h-3 ml-0.5 hover:text-red-200" />
-                    </button>
-                  ))}
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="text"
-                  value={editCustomSubjectInput}
-                  onChange={(e) => setEditCustomSubjectInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleEditAddCustomSubject();
-                    }
-                  }}
-                  placeholder="Or type custom subject..."
-                  className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={handleEditAddCustomSubject}
-                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Subject
-                </button>
-              </div>
+            {/* Edit Mark and Dropdown Select: Subjects Taught */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <MarkDropdownSelect
+                label="Subjects Taught"
+                required
+                options={PRESET_SUBJECTS}
+                selectedValues={editSelectedSubjects}
+                onToggleValue={toggleEditSubject}
+                onAddCustomValue={(customVal) => {
+                  if (!editSelectedSubjects.includes(customVal)) {
+                    setEditSelectedSubjects([...editSelectedSubjects, customVal]);
+                  }
+                }}
+                placeholder="Click to select and mark subjects taught..."
+                badgeTheme="blue"
+              />
             </div>
 
             {/* Assign/Update Password */}
@@ -785,6 +590,21 @@ export const TeacherManager: React.FC = () => {
           </form>
         </div>
       )}
+
+      {/* Confirmation Modal for Teacher Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!teacherToDelete}
+        onClose={() => setTeacherToDelete(null)}
+        onConfirm={() => {
+          if (teacherToDelete) {
+            deleteTeacher(teacherToDelete.id);
+            setTeacherToDelete(null);
+          }
+        }}
+        title="Confirm Educator Profile Deletion"
+        message="Are you sure you want to delete this teacher profile from the school portal?"
+        itemName={teacherToDelete ? `${teacherToDelete.firstName} ${teacherToDelete.lastName} (${teacherToDelete.staffId})` : undefined}
+      />
     </div>
   );
 };
