@@ -210,7 +210,11 @@ export interface Assignment {
   teacherName: string;
   dueDate: string;
   description: string;
+  format?: 'text' | 'word' | 'pdf';
+  content?: string;
   attachmentUrl?: string;
+  attachmentName?: string;
+  fileSize?: string;
   createdDate: string;
   totalMarks?: number;
 }
