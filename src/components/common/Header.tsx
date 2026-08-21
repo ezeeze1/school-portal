@@ -38,7 +38,7 @@ export const Header: React.FC = () => {
     { id: 'admissions', label: 'Admissions' },
     { id: 'news', label: 'News & Events' },
     { id: 'gallery', label: 'Gallery' },
-    { id: 'downloads', label: 'Downloads' },
+    { id: 'employment', label: 'Employment' },
     { id: 'contact', label: 'Contact' },
   ];
 

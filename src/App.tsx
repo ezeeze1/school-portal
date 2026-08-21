@@ -13,7 +13,7 @@ import { NewsEventsPage } from './components/public/NewsEventsPage';
 import { GalleryPage } from './components/public/GalleryPage';
 import { ContactPage } from './components/public/ContactPage';
 import { OnlineApplicationPage } from './components/public/OnlineApplicationPage';
-import { DownloadsPage } from './components/public/DownloadsPage';
+import { EmploymentPage } from './components/public/EmploymentPage';
 
 // Role Portals
 import { StudentPortalLayout } from './components/student/StudentPortalLayout';
@@ -50,7 +50,7 @@ const MainApp: React.FC = () => {
             {currentView === 'gallery' && <GalleryPage />}
             {currentView === 'contact' && <ContactPage />}
             {currentView === 'apply' && <OnlineApplicationPage />}
-            {currentView === 'downloads' && <DownloadsPage />}
+            {currentView === 'employment' && <EmploymentPage />}
           </>
         )}
       </main>

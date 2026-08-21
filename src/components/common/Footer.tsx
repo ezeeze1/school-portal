@@ -58,7 +58,7 @@ export const Footer: React.FC = () => {
                 <button onClick={() => setCurrentView('gallery')} className="hover:text-amber-400 transition-colors">Campus Gallery</button>
               </li>
               <li>
-                <button onClick={() => setCurrentView('downloads')} className="hover:text-amber-400 transition-colors">Downloads & Guides</button>
+                <button onClick={() => setCurrentView('employment')} className="hover:text-amber-400 transition-colors">Teaching Employment & Careers</button>
               </li>
             </ul>
           </div>
