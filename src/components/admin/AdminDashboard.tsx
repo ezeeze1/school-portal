@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X } from 'lucide-react';
+import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key } from 'lucide-react';
 
 export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
   const { students, teachers, parents, applications, subjects, addSubject, systemSettings } = useSchool();
@@ -191,6 +191,15 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
             <Settings className="w-6 h-6 text-red-500 mb-2" />
             <p className="font-bold text-xs text-slate-900 dark:text-white">Academic Sessions & Result Release</p>
             <p className="text-[11px] text-slate-500">Set active terms & result publication</p>
+          </button>
+
+          <button
+            onClick={() => onNavigate('sessions')}
+            className="p-4 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 hover:bg-amber-500/20 text-left space-y-1 transition-all border border-amber-500/30"
+          >
+            <Key className="w-6 h-6 text-amber-500 mb-2" />
+            <p className="font-bold text-xs text-slate-900 dark:text-white">Admin Password & Username</p>
+            <p className="text-[11px] text-slate-500">Update login username, email & password at will</p>
           </button>
 
           <button

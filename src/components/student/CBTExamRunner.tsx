@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, Student } from '../../types';
 import { Clock, AlertTriangle, CheckCircle2, XCircle, Flag, ArrowLeft, ArrowRight, Award, ShieldCheck, Sparkles, LogOut } from 'lucide-react';
@@ -18,9 +18,26 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
   // Timer state in seconds
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(exam.durationMinutes * 60);
   const [isExamCompleted, setIsExamCompleted] = useState(false);
+  const [autoSubmittedDueToTime, setAutoSubmittedDueToTime] = useState(false);
   const [finalScore, setFinalScore] = useState<any>(null);
 
   const currentQ = exam.questions[currentQuestionIndex];
+
+  // Store refs to keep values fresh during interval callbacks
+  const userAnswersRef = useRef(userAnswers);
+  useEffect(() => {
+    userAnswersRef.current = userAnswers;
+  }, [userAnswers]);
+
+  const timeLeftRef = useRef(timeLeftSeconds);
+  useEffect(() => {
+    timeLeftRef.current = timeLeftSeconds;
+  }, [timeLeftSeconds]);
+
+  const isExamCompletedRef = useRef(isExamCompleted);
+  useEffect(() => {
+    isExamCompletedRef.current = isExamCompleted;
+  }, [isExamCompleted]);
 
   // Timer Countdown Effect
   useEffect(() => {
@@ -30,7 +47,6 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
       setTimeLeftSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleCompleteExam(); // Auto-submit when time expires
           return 0;
         }
         return prev - 1;
@@ -39,6 +55,13 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
 
     return () => clearInterval(timer);
   }, [isExamCompleted]);
+
+  // Handle auto-completion when timer hits 0
+  useEffect(() => {
+    if (timeLeftSeconds === 0 && !isExamCompleted) {
+      handleCompleteExam(true);
+    }
+  }, [timeLeftSeconds, isExamCompleted]);
 
   const handleSelectOption = (option: 'A' | 'B' | 'C' | 'D') => {
     if (isExamCompleted) return;
@@ -55,18 +78,21 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
     }));
   };
 
-  const handleCompleteExam = () => {
-    if (isExamCompleted) return;
+  const handleCompleteExam = (isAutoSubmit = false) => {
+    if (isExamCompletedRef.current) return;
 
+    const answersToGrade = userAnswersRef.current;
     let obtainedMarks = 0;
     exam.questions.forEach((q) => {
-      if (userAnswers[q.id] === q.correctOption) {
+      if (answersToGrade[q.id] === q.correctOption) {
         obtainedMarks += q.marks;
       }
     });
 
     const percentage = Math.round((obtainedMarks / exam.totalMarks) * 100);
-    const timeTaken = exam.durationMinutes * 60 - timeLeftSeconds;
+    const timeTaken = isAutoSubmit
+      ? exam.durationMinutes * 60
+      : exam.durationMinutes * 60 - timeLeftRef.current;
 
     const resultData = {
       examId: exam.id,
@@ -76,14 +102,17 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
       scoreObtained: obtainedMarks,
       totalMarks: exam.totalMarks,
       percentage,
-      passed: true,
-      timeTakenSeconds: timeTaken,
+      passed: percentage >= 50,
+      timeTakenSeconds: Math.max(1, timeTaken),
       completedAt: new Date().toISOString(),
-      answers: userAnswers,
+      answers: answersToGrade,
     };
 
     submitCBTAttempt(resultData);
     setFinalScore(resultData);
+    if (isAutoSubmit) {
+      setAutoSubmittedDueToTime(true);
+    }
     setIsExamCompleted(true);
   };
 
@@ -125,6 +154,20 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
       {isExamCompleted && finalScore ? (
         /* Instant Grade Review Panel */
         <div className="max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-8 animate-fade-in shadow-2xl">
+          {autoSubmittedDueToTime && (
+            <div className="bg-amber-950/80 border-2 border-amber-500/80 rounded-2xl p-5 flex items-center gap-4 text-amber-200 animate-pulse shadow-lg">
+              <AlertTriangle className="w-8 h-8 text-amber-400 flex-shrink-0" />
+              <div className="space-y-1">
+                <h4 className="font-bold text-sm text-amber-300 uppercase tracking-wider">
+                  ⚠️ Time Allocated Expired - Exam Auto-Submitted
+                </h4>
+                <p className="text-xs text-amber-200/90 leading-relaxed">
+                  Your allocated time for this CBT examination elapsed. All your answers were automatically evaluated, your score was recorded in official school records, and submitted for you.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="text-center space-y-4 border-b border-slate-800 pb-6">
             <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto text-3xl bg-emerald-950 text-emerald-400 border-2 border-emerald-500 shadow-lg">
               <CheckCircle2 className="w-10 h-10" />

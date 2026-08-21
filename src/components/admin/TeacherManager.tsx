@@ -306,7 +306,7 @@ export const TeacherManager: React.FC = () => {
                   onClick={() => handleStartEdit(teacher)}
                   className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
                 >
-                  <Edit className="w-3.5 h-3.5" /> Edit Assignments
+                  <Edit className="w-3.5 h-3.5" /> Edit
                 </button>
                 <button
                   onClick={() => deleteTeacher(teacher.id)}
@@ -566,7 +566,7 @@ export const TeacherManager: React.FC = () => {
           >
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <h3 className="font-serif font-bold text-xl text-slate-900 dark:text-white flex items-center gap-2">
-                <Edit className="w-5 h-5 text-amber-500" /> Edit Teacher Assignments
+                <Edit className="w-5 h-5 text-amber-500" /> Edit Staff Profile
               </h3>
               <span className="font-mono text-xs font-bold text-amber-600">{editingTeacher.staffId}</span>
             </div>

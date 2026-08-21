@@ -1,11 +1,21 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles, Key, Eye, EyeOff, UserCheck, AlertCircle } from 'lucide-react';
 
 export const AcademicSessionManager: React.FC = () => {
-  const { systemSettings, updateSystemSettings } = useSchool();
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'academic' | 'general'>('academic');
+  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials } = useSchool();
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'academic' | 'security' | 'general'>('academic');
   const [generalSection, setGeneralSection] = useState<'identity' | 'hero' | 'stats' | 'about'>('identity');
+
+  // Admin Security & Credentials State
+  const [adminName, setAdminName] = useState(adminCredentials.name || '');
+  const [adminUsername, setAdminUsername] = useState(adminCredentials.username || '');
+  const [adminEmail, setAdminEmail] = useState(adminCredentials.email || '');
+  const [adminPassword, setAdminPassword] = useState(adminCredentials.password || '');
+  const [confirmPassword, setConfirmPassword] = useState(adminCredentials.password || '');
+  const [showPassword, setShowPassword] = useState(false);
+  const [secError, setSecError] = useState<string | null>(null);
+  const [secSuccess, setSecSuccess] = useState<string | null>(null);
 
   // Academic settings state
   const [session, setSession] = useState(systemSettings.currentSession);
@@ -56,6 +66,42 @@ export const AcademicSessionManager: React.FC = () => {
     setTimeout(() => setSaved(false), 3000);
   };
 
+  const handleSaveAdminSecurity = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecError(null);
+    setSecSuccess(null);
+
+    if (!adminUsername.trim()) {
+      setSecError('Admin Username / Login Identifier cannot be empty.');
+      return;
+    }
+
+    if (!adminEmail.trim()) {
+      setSecError('Admin Email address cannot be empty.');
+      return;
+    }
+
+    if (adminPassword.length < 4) {
+      setSecError('Password must be at least 4 characters long.');
+      return;
+    }
+
+    if (adminPassword !== confirmPassword) {
+      setSecError('New password and confirm password do not match!');
+      return;
+    }
+
+    updateAdminCredentials({
+      name: adminName.trim(),
+      username: adminUsername.trim(),
+      email: adminEmail.trim(),
+      password: adminPassword.trim(),
+    });
+
+    setSecSuccess('Administrator username and password updated successfully! Your new credentials are live.');
+    setTimeout(() => setSecSuccess(null), 5000);
+  };
+
   const handleSaveGeneral = (e: React.FormEvent) => {
     e.preventDefault();
     updateSystemSettings({
@@ -95,10 +141,10 @@ export const AcademicSessionManager: React.FC = () => {
     <div className="space-y-8 max-w-5xl mx-auto">
       
       {/* Top Setting Tab Selector */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 pb-1">
+      <div className="flex border-b border-slate-200 dark:border-slate-800 pb-1 overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveSettingsTab('academic')}
-          className={`px-6 py-3 font-bold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all ${
+          className={`px-6 py-3 font-bold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all flex-shrink-0 ${
             activeSettingsTab === 'academic'
               ? 'border-slate-900 dark:border-amber-500 text-slate-900 dark:text-amber-400'
               : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
@@ -108,8 +154,19 @@ export const AcademicSessionManager: React.FC = () => {
           Academic & Session Settings
         </button>
         <button
+          onClick={() => setActiveSettingsTab('security')}
+          className={`px-6 py-3 font-bold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all flex-shrink-0 ${
+            activeSettingsTab === 'security'
+              ? 'border-slate-900 dark:border-amber-500 text-slate-900 dark:text-amber-400'
+              : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
+          }`}
+        >
+          <Key className="w-4 h-4" />
+          Admin Security & Login Credentials
+        </button>
+        <button
           onClick={() => setActiveSettingsTab('general')}
-          className={`px-6 py-3 font-bold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all ${
+          className={`px-6 py-3 font-bold text-xs uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all flex-shrink-0 ${
             activeSettingsTab === 'general'
               ? 'border-slate-900 dark:border-amber-500 text-slate-900 dark:text-amber-400'
               : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-300'
@@ -182,6 +239,141 @@ export const AcademicSessionManager: React.FC = () => {
               className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
             >
               <Save className="w-4 h-4" /> Save System Settings
+            </button>
+          </div>
+        </form>
+      ) : activeSettingsTab === 'security' ? (
+        <form onSubmit={handleSaveAdminSecurity} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-6 shadow-xl animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <h2 className="font-serif font-bold text-xl text-slate-900 dark:text-white flex items-center gap-2">
+                <ShieldCheck className="w-6 h-6 text-amber-500" /> Admin Account & Password Security
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Customize your administrator username, login email, and password at will.
+              </p>
+            </div>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl px-4 py-2 flex items-center gap-2 text-xs font-bold text-amber-600 dark:text-amber-400">
+              <UserCheck className="w-4 h-4 flex-shrink-0" />
+              <span>Active Admin: {adminCredentials.username}</span>
+            </div>
+          </div>
+
+          {secError && (
+            <div className="bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 p-4 rounded-2xl border border-rose-300 dark:border-rose-800 flex items-center gap-2 text-xs font-bold animate-shake">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-600 dark:text-rose-400" />
+              <span>{secError}</span>
+            </div>
+          )}
+
+          {secSuccess && (
+            <div className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl border border-emerald-300 dark:border-emerald-800 flex items-center gap-2 text-xs font-bold animate-fade-in">
+              <CheckCircle2 className="w-5 h-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>{secSuccess}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-xs">
+            <div className="space-y-1 sm:col-span-2">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Administrator Full Display Name *
+              </label>
+              <input
+                type="text"
+                required
+                value={adminName}
+                onChange={(e) => setAdminName(e.target.value)}
+                placeholder="e.g. System Administrator, Ezekiel Samson"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Admin Username / Login ID *
+              </label>
+              <input
+                type="text"
+                required
+                value={adminUsername}
+                onChange={(e) => setAdminUsername(e.target.value)}
+                placeholder="e.g. admin, superadmin, ezekiel"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold font-mono text-slate-900 dark:text-white outline-none focus:border-amber-500"
+              />
+              <p className="text-[11px] text-slate-500">You can use this username or your email address to log into the admin portal.</p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Admin Email Address *
+              </label>
+              <input
+                type="email"
+                required
+                value={adminEmail}
+                onChange={(e) => setAdminEmail(e.target.value)}
+                placeholder="e.g. ezekielsamson1@gmail.com"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                New Password *
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder="Enter new admin password"
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
+                Confirm New Password *
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-type new admin password"
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="text-[11px] text-slate-500 flex items-center gap-1">
+              <Lock className="w-3.5 h-3.5 text-amber-500" /> Changes apply immediately and are stored securely in browser storage.
+            </div>
+
+            <button
+              type="submit"
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
+            >
+              <Key className="w-4 h-4" /> Save Admin Credentials
             </button>
           </div>
         </form>

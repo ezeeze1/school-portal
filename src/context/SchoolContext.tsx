@@ -20,7 +20,8 @@ import {
   DownloadDocument,
   AnnouncementNotification,
   FeeRecord,
-  SystemSessionTerm
+  SystemSessionTerm,
+  AdminCredentials
 } from '../types';
 
 import {
@@ -58,9 +59,11 @@ interface SchoolContextType {
   currentView: string;
   setCurrentView: (view: string) => void;
 
-  // System Settings
+  // System Settings & Security
   systemSettings: SystemSessionTerm;
   updateSystemSettings: (settings: Partial<SystemSessionTerm>) => void;
+  adminCredentials: AdminCredentials;
+  updateAdminCredentials: (credentials: Partial<AdminCredentials>) => void;
 
   // Data Collections
   students: Student[];
@@ -142,10 +145,23 @@ const SchoolContext = createContext<SchoolContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_KEY = 'divine_academy_school_db_v2';
 
+const initialAdminCredentials: AdminCredentials = {
+  username: 'admin',
+  email: 'ezekielsamson1@gmail.com',
+  password: 'sezuo2020',
+  name: 'System Administrator',
+};
+
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeRole, setActiveRole] = useState<UserRole>('public');
   const [currentView, setCurrentView] = useState<string>('home');
+
+  // Admin Credentials State
+  const [adminCredentials, setAdminCredentials] = useState<AdminCredentials>(() => {
+    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_admin_creds`);
+    return saved ? JSON.parse(saved) : initialAdminCredentials;
+  });
 
   // Load state from local storage or initial mock data
   const [systemSettings, setSystemSettings] = useState<SystemSessionTerm>(() => {
@@ -245,6 +261,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Persist handlers
   useEffect(() => {
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_admin_creds`, JSON.stringify(adminCredentials));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_settings`, JSON.stringify(systemSettings));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_students`, JSON.stringify(students));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_teachers`, JSON.stringify(teachers));
@@ -264,6 +281,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_downloads`, JSON.stringify(downloads));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_announcements`, JSON.stringify(announcements));
   }, [
+    adminCredentials,
     systemSettings,
     students,
     teachers,
@@ -290,13 +308,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (role === 'public') {
       setCurrentUser(null);
       setCurrentView('home');
+    } else if (role === 'admin') {
+      setCurrentUser({
+        id: 'usr-admin',
+        name: adminCredentials.name || 'System Administrator',
+        email: adminCredentials.email || adminCredentials.username || 'ezekielsamson1@gmail.com',
+        role: 'admin',
+      });
+      setCurrentView('admin-portal');
     } else {
       const demoUser = sampleUsers.find((u) => u.role === role);
       if (demoUser) {
         setCurrentUser(demoUser);
       }
-      if (role === 'admin') setCurrentView('admin-portal');
-      else if (role === 'teacher') setCurrentView('teacher-portal');
+      if (role === 'teacher') setCurrentView('teacher-portal');
       else if (role === 'student') setCurrentView('student-portal');
       else if (role === 'parent') setCurrentView('parent-portal');
     }
@@ -310,6 +335,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateSystemSettings = (updated: Partial<SystemSessionTerm>) => {
     setSystemSettings((prev) => ({ ...prev, ...updated }));
+  };
+
+  const updateAdminCredentials = (updated: Partial<AdminCredentials>) => {
+    setAdminCredentials((prev) => {
+      const next = { ...prev, ...updated };
+      if (currentUser?.role === 'admin') {
+        setCurrentUser((curr) => curr ? {
+          ...curr,
+          name: next.name || curr.name,
+          email: next.email || next.username || curr.email,
+        } : null);
+      }
+      return next;
+    });
   };
 
   // CRUD Implementations
@@ -550,6 +589,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCurrentView,
         systemSettings,
         updateSystemSettings,
+        adminCredentials,
+        updateAdminCredentials,
         students,
         teachers,
         parents,

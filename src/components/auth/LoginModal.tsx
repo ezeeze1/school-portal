@@ -9,42 +9,47 @@ interface LoginModalProps {
   defaultRole?: UserRole;
 }
 
-const detectRoleFromEmail = (emailStr: string): UserRole => {
-  const cleanEmail = emailStr.toLowerCase().trim();
-  if (cleanEmail === 'ezekielsamson1@gmail.com') {
-    return 'admin';
-  }
-  if (cleanEmail.includes('parent') || cleanEmail.includes('guardian') || cleanEmail === 'parent.adeleke@gmail.com') {
-    return 'parent';
-  }
-  if (cleanEmail === 'david.adams@divineacademy.edu' || cleanEmail.includes('teacher') || cleanEmail.includes('staff') || cleanEmail.includes('faculty')) {
-    return 'teacher';
-  }
-  if (cleanEmail === 'david.adeleke@student.divineacademy.edu' || cleanEmail.includes('student')) {
-    return 'student';
-  }
-  if (cleanEmail.includes('@student.')) {
-    return 'student';
-  }
-  if (cleanEmail.includes('@divineacademy.edu')) {
-    return 'teacher';
-  }
-  return 'student'; // Fallback
-};
-
-const getCredentialsForRole = (role: UserRole) => {
-  if (role === 'admin') return { email: 'ezekielsamson1@gmail.com', password: 'sezuo2020' };
-  if (role === 'teacher') return { email: 'david.adams@divineacademy.edu', password: 'password123' };
-  if (role === 'parent') return { email: 'parent.adeleke@gmail.com', password: 'password123' };
-  return { email: 'david.adeleke@student.divineacademy.edu', password: 'password123' };
-};
-
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, defaultRole = 'student' }) => {
-  const { switchRole, students, teachers } = useSchool();
+  const { switchRole, students, teachers, adminCredentials } = useSchool();
   const [selectedRole, setSelectedRole] = useState<UserRole>(defaultRole);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const detectRoleFromEmail = (emailStr: string): UserRole => {
+    const cleanEmail = emailStr.toLowerCase().trim();
+    if (
+      cleanEmail === adminCredentials.username.toLowerCase() ||
+      cleanEmail === adminCredentials.email.toLowerCase() ||
+      cleanEmail === 'ezekielsamson1@gmail.com' ||
+      cleanEmail === 'admin'
+    ) {
+      return 'admin';
+    }
+    if (cleanEmail.includes('parent') || cleanEmail.includes('guardian') || cleanEmail === 'parent.adeleke@gmail.com') {
+      return 'parent';
+    }
+    if (cleanEmail === 'david.adams@divineacademy.edu' || cleanEmail.includes('teacher') || cleanEmail.includes('staff') || cleanEmail.includes('faculty')) {
+      return 'teacher';
+    }
+    if (cleanEmail === 'david.adeleke@student.divineacademy.edu' || cleanEmail.includes('student')) {
+      return 'student';
+    }
+    if (cleanEmail.includes('@student.')) {
+      return 'student';
+    }
+    if (cleanEmail.includes('@divineacademy.edu')) {
+      return 'teacher';
+    }
+    return 'student'; // Fallback
+  };
+
+  const getCredentialsForRole = (role: UserRole) => {
+    if (role === 'admin') return { email: adminCredentials.username || adminCredentials.email, password: adminCredentials.password };
+    if (role === 'teacher') return { email: 'david.adams@divineacademy.edu', password: 'password123' };
+    if (role === 'parent') return { email: 'parent.adeleke@gmail.com', password: 'password123' };
+    return { email: 'david.adeleke@student.divineacademy.edu', password: 'password123' };
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -77,11 +82,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
     const inputPass = password.trim();
 
     if (selectedRole === 'admin') {
-      if (inputUser === 'ezekielsamson1@gmail.com' && inputPass === 'sezuo2020') {
+      const isValidAdminUser =
+        inputUser === adminCredentials.username.toLowerCase() ||
+        inputUser === adminCredentials.email.toLowerCase() ||
+        inputUser === 'ezekielsamson1@gmail.com' ||
+        inputUser === 'admin';
+
+      const isValidAdminPass =
+        inputPass === adminCredentials.password ||
+        (inputUser === 'ezekielsamson1@gmail.com' && inputPass === 'sezuo2020');
+
+      if (isValidAdminUser && isValidAdminPass) {
         switchRole('admin');
         onClose();
       } else {
-        setErrorMsg('Invalid Administrator email address or password!');
+        setErrorMsg('Invalid Administrator username, email or password!');
       }
     } else if (selectedRole === 'teacher') {
       const matchedTeacher = teachers.find(
