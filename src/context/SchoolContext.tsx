@@ -52,7 +52,7 @@ interface SchoolContextType {
   currentUser: User | null;
   activeRole: UserRole;
   setCurrentUser: (user: User | null) => void;
-  switchRole: (role: UserRole) => void;
+  switchRole: (role: UserRole, userObj?: User | null) => void;
   logout: () => void;
 
   // Active View Navigation
@@ -153,8 +153,14 @@ const initialAdminCredentials: AdminCredentials = {
 };
 
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeRole, setActiveRole] = useState<UserRole>('public');
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [activeRole, setActiveRole] = useState<UserRole>(() => {
+    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_active_role`);
+    return saved ? JSON.parse(saved) : 'public';
+  });
   const [currentView, setCurrentView] = useState<string>('home');
 
   // Admin Credentials State
@@ -280,7 +286,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_apps`, JSON.stringify(applications));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_downloads`, JSON.stringify(downloads));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_announcements`, JSON.stringify(announcements));
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_current_user`, JSON.stringify(currentUser));
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_active_role`, JSON.stringify(activeRole));
   }, [
+    currentUser,
+    activeRole,
     adminCredentials,
     systemSettings,
     students,
@@ -303,28 +313,61 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   ]);
 
   // Role switching
-  const switchRole = (role: UserRole) => {
+  const switchRole = (role: UserRole, userObj?: User | null) => {
     setActiveRole(role);
     if (role === 'public') {
       setCurrentUser(null);
       setCurrentView('home');
+      return;
+    }
+
+    if (userObj) {
+      setCurrentUser(userObj);
     } else if (role === 'admin') {
       setCurrentUser({
         id: 'usr-admin',
         name: adminCredentials.name || 'System Administrator',
         email: adminCredentials.email || adminCredentials.username || 'ezekielsamson1@gmail.com',
         role: 'admin',
+        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200',
+        referenceId: 'ADM-001',
       });
-      setCurrentView('admin-portal');
-    } else {
-      const demoUser = sampleUsers.find((u) => u.role === role);
-      if (demoUser) {
-        setCurrentUser(demoUser);
-      }
-      if (role === 'teacher') setCurrentView('teacher-portal');
-      else if (role === 'student') setCurrentView('student-portal');
-      else if (role === 'parent') setCurrentView('parent-portal');
+    } else if (role === 'teacher') {
+      const teacherObj = teachers[0];
+      setCurrentUser({
+        id: teacherObj?.id || 'tch-102',
+        name: teacherObj ? `${teacherObj.firstName} ${teacherObj.lastName}` : 'Mr. David Adams',
+        email: teacherObj?.email || 'david.adams@divineacademy.edu',
+        role: 'teacher',
+        avatar: teacherObj?.avatar || 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200',
+        referenceId: teacherObj?.staffId || 'TCH-102',
+      });
+    } else if (role === 'student') {
+      const studentObj = students[0];
+      setCurrentUser({
+        id: studentObj?.id || 'std-004',
+        name: studentObj ? `${studentObj.firstName} ${studentObj.lastName}` : 'David Adeleke',
+        email: studentObj?.parentEmail || 'david.adeleke@student.divineacademy.edu',
+        role: 'student',
+        avatar: studentObj?.avatar || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&q=80&w=200',
+        referenceId: studentObj?.admissionNo || 'STD/2025/004',
+      });
+    } else if (role === 'parent') {
+      const parentObj = parents[0];
+      setCurrentUser({
+        id: parentObj?.id || 'prt-409',
+        name: parentObj ? (parentObj.title ? `${parentObj.title} ${parentObj.fullName}` : parentObj.fullName) : 'Chief Olabisi Adeleke',
+        email: parentObj?.email || 'parent.adeleke@gmail.com',
+        role: 'parent',
+        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
+        referenceId: parentObj?.parentId || 'PRT-409',
+      });
     }
+
+    if (role === 'teacher') setCurrentView('teacher-portal');
+    else if (role === 'student') setCurrentView('student-portal');
+    else if (role === 'parent') setCurrentView('parent-portal');
+    else if (role === 'admin') setCurrentView('admin-portal');
   };
 
   const logout = () => {

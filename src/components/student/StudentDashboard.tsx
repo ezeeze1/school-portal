@@ -30,7 +30,7 @@ export const StudentDashboard: React.FC<{ student: Student; onNavigate: (tab: st
               {student.className} • {student.house} House
             </span>
             <h1 className="font-serif font-bold text-2xl sm:text-3xl mt-1">
-              Welcome back, {student.firstName}!
+              Welcome back, {student.firstName} {student.lastName}!
             </h1>
             <p className="text-xs text-slate-400">Admission No: {student.admissionNo}</p>
           </div>

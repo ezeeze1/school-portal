@@ -5,9 +5,35 @@ import { Users, Award, Calendar, Bell, Printer, Heart, ArrowRight, Lock, Unlock,
 import { ReportCardModal } from '../reports/ReportCardModal';
 
 export const ParentPortalLayout: React.FC = () => {
-  const { students, parents, results, attendance, announcements } = useSchool();
-  const [selectedStudentId, setSelectedStudentId] = useState<string>('std-004');
+  const { currentUser, students, parents, results, attendance, announcements } = useSchool();
   const [activeReportModal, setActiveReportModal] = useState<any | null>(null);
+
+  // Find logged-in parent
+  const currentParent =
+    parents.find(
+      (p) =>
+        p.id === currentUser?.id ||
+        p.parentId?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
+        p.email.toLowerCase() === currentUser?.email?.toLowerCase()
+    ) ||
+    parents.find(
+      (p) => p.fullName.toLowerCase() === currentUser?.name?.toLowerCase()
+    ) ||
+    parents[0];
+
+  const parentDisplayName = currentParent
+    ? (currentParent.title ? `${currentParent.title} ${currentParent.fullName}` : currentParent.fullName)
+    : (currentUser?.name || 'Chief Olabisi Adeleke');
+
+  // Wards / Children belonging to this parent
+  const parentWards = students.filter(
+    (s) => s.parentEmail?.toLowerCase() === currentParent?.email?.toLowerCase() || currentParent?.studentIds?.includes(s.id)
+  );
+  const availableStudents = parentWards.length > 0 ? parentWards : students;
+
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(
+    availableStudents[0]?.id || 'std-004'
+  );
 
   // Passcode protection state for parent portal (same passcode as student)
   const [unlockedStudents, setUnlockedStudents] = useState<Record<string, boolean>>({});
@@ -16,7 +42,7 @@ export const ParentPortalLayout: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   // Selected child object
-  const selectedStudent = students.find((s) => s.id === selectedStudentId) || students[0];
+  const selectedStudent = students.find((s) => s.id === selectedStudentId) || availableStudents[0] || students[0];
 
   // Associated parent profile
   const parentProfile = parents.find((p) => p.email === selectedStudent.parentEmail) || parents[0];
@@ -69,7 +95,7 @@ export const ParentPortalLayout: React.FC = () => {
             Parent & Guardian Portal
           </span>
           <h1 className="font-serif font-bold text-2xl sm:text-3xl">
-            Welcome, {parentProfile ? parentProfile.name : 'Chief Nnamdi Eze'}
+            Welcome, {parentDisplayName}
           </h1>
           <p className="text-xs text-slate-400">
             Monitor real-time academic growth, attendance logs, and school fee receipts.
@@ -79,8 +105,8 @@ export const ParentPortalLayout: React.FC = () => {
         {/* Children Ward Switcher */}
         <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2">
           <span className="text-[10px] uppercase font-bold text-slate-400">Select Ward / Child to Monitor:</span>
-          <div className="flex gap-2">
-            {students.slice(0, 2).map((std) => (
+          <div className="flex gap-2 flex-wrap">
+            {availableStudents.map((std) => (
               <button
                 key={std.id}
                 onClick={() => {

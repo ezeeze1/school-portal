@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useSchool } from '../../context/SchoolContext';
 import { TeacherDashboard } from './TeacherDashboard';
 import { ScoreEntrySheet } from './ScoreEntrySheet';
 import { CBTQuestionBankBuilder } from './CBTQuestionBankBuilder';
@@ -10,7 +11,20 @@ import { StudentManager } from '../admin/StudentManager';
 import { LayoutDashboard, FileSpreadsheet, Clock, Archive, Users, BookOpen, Bell, GraduationCap } from 'lucide-react';
 
 export const TeacherPortalLayout: React.FC = () => {
+  const { currentUser, teachers } = useSchool();
   const [activeTab, setActiveTab] = useState('dashboard');
+
+  const currentTeacher =
+    teachers.find(
+      (t) =>
+        t.id === currentUser?.id ||
+        t.staffId?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
+        t.email.toLowerCase() === currentUser?.email?.toLowerCase()
+    ) ||
+    teachers.find(
+      (t) => `${t.firstName} ${t.lastName}`.toLowerCase() === currentUser?.name?.toLowerCase()
+    ) ||
+    teachers[0];
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -47,7 +61,7 @@ export const TeacherPortalLayout: React.FC = () => {
         })}
       </div>
 
-      {activeTab === 'dashboard' && <TeacherDashboard onNavigate={(tab) => setActiveTab(tab)} />}
+      {activeTab === 'dashboard' && <TeacherDashboard teacher={currentTeacher} onNavigate={(tab) => setActiveTab(tab)} />}
       {activeTab === 'students' && <StudentManager />}
       {activeTab === 'scores' && <ScoreEntrySheet />}
       {activeTab === 'cbt' && <CBTQuestionBankBuilder />}

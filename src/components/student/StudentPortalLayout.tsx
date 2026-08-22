@@ -13,7 +13,17 @@ export const StudentPortalLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   // Find matching student record
-  const currentStudent = students.find((s) => s.id === 'std-004') || students[0];
+  const currentStudent =
+    students.find(
+      (s) =>
+        s.id === currentUser?.id ||
+        s.admissionNo?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
+        s.id === currentUser?.referenceId
+    ) ||
+    students.find(
+      (s) => `${s.firstName} ${s.lastName}`.toLowerCase() === currentUser?.name?.toLowerCase()
+    ) ||
+    students[0];
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: GraduationCap },

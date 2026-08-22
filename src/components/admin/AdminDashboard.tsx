@@ -3,7 +3,9 @@ import { useSchool } from '../../context/SchoolContext';
 import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key } from 'lucide-react';
 
 export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
-  const { students, teachers, parents, applications, subjects, addSubject, systemSettings } = useSchool();
+  const { currentUser, adminCredentials, students, teachers, parents, applications, subjects, addSubject, systemSettings } = useSchool();
+
+  const adminName = currentUser?.name || adminCredentials.name || 'System Administrator';
 
   const [showAddSubjectModal, setShowAddSubjectModal] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
@@ -67,10 +69,10 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
             <ShieldCheck className="w-4 h-4" /> System Administrator Control Center
           </span>
           <h1 className="font-serif font-bold text-2xl sm:text-3xl">
-            DIVINE ACADEMY SECONDARY SCHOOL Management
+            Welcome, {adminName}
           </h1>
           <p className="text-xs text-slate-400">
-            Current Session: {systemSettings.currentSession} ({systemSettings.currentTerm})
+            {systemSettings.schoolName} Management • Current Session: {systemSettings.currentSession} ({systemSettings.currentTerm})
           </p>
         </div>
 

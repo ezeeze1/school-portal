@@ -1,9 +1,31 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
+import { Teacher } from '../../types';
 import { Users, FileSpreadsheet, Clock, Archive, BookOpen, GraduationCap, UserPlus, Send, FileText } from 'lucide-react';
 
-export const TeacherDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
-  const { students, cbtExams, assignments, systemSettings } = useSchool();
+export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: string) => void }> = ({
+  teacher,
+  onNavigate,
+}) => {
+  const { currentUser, teachers, students, cbtExams, assignments, systemSettings } = useSchool();
+
+  const currentTeacher =
+    teacher ||
+    teachers.find(
+      (t) =>
+        t.id === currentUser?.id ||
+        t.staffId?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
+        t.email.toLowerCase() === currentUser?.email?.toLowerCase()
+    ) ||
+    teachers[0];
+
+  const teacherName = currentTeacher
+    ? `${currentTeacher.firstName} ${currentTeacher.lastName}`
+    : (currentUser?.name || 'Faculty Member');
+
+  const formClassBadge = currentTeacher?.formClassName
+    ? `Form Teacher (${currentTeacher.formClassName})`
+    : 'Faculty Member';
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
@@ -12,10 +34,10 @@ export const TeacherDashboard: React.FC<{ onNavigate: (tab: string) => void }> =
       <div className="bg-slate-900 text-white rounded-3xl p-8 border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-6 shadow-2xl">
         <div className="space-y-1">
           <span className="text-amber-400 font-bold text-xs uppercase tracking-wider">
-            Faculty Member Portal • SS 2 Form Teacher
+            Faculty Member Portal • {formClassBadge}
           </span>
           <h1 className="font-serif font-bold text-2xl sm:text-3xl">
-            Welcome, Dr. (Mrs.) Victoria Adebayo
+            Welcome, {teacherName}
           </h1>
           <p className="text-xs text-slate-400">
             Current Session: {systemSettings.currentSession} ({systemSettings.currentTerm})
