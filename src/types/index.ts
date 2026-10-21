@@ -327,6 +327,7 @@ export interface FeeRecord {
 
 export interface SystemSessionTerm {
   currentSession: string; // e.g., "2025/2026"
+  academicSessions?: string[]; // e.g., ["2026/2027", "2025/2026", "2024/2025"]
   currentTerm: '1st Term' | '2nd Term' | '3rd Term';
   isResultPublished?: boolean;
   resultEntryOpen: boolean;

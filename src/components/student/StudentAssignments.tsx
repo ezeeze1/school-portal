@@ -14,6 +14,10 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
     (a) => a.classId === student.classId || a.className.includes(student.className) || student.className.includes(a.className)
   );
 
+  const studentNotes = studyNotes.filter(
+    (n) => !n.classId || n.classId === 'all' || n.classId === student.classId || n.className === 'All Classes' || n.className.includes(student.className) || student.className.includes(n.className)
+  );
+
   const handleSubmitHomework = (asgId: string) => {
     setSubmittedTasks((prev) => ({ ...prev, [asgId]: submissionText || 'Answer submitted.' }));
     setActiveAsgId(null);
@@ -51,7 +55,7 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
             }`}
           >
-            Download Notes ({studyNotes.length})
+            Download Notes ({studentNotes.length})
           </button>
         </div>
       </div>
@@ -190,15 +194,20 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {studyNotes.map((note) => (
+          {studentNotes.map((note) => (
             <div
               key={note.id}
               className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-3 shadow-sm flex flex-col justify-between"
             >
               <div className="space-y-2">
-                <span className="text-[10px] font-bold uppercase bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded">
-                  {note.subjectName}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded">
+                    {note.subjectName}
+                  </span>
+                  <span className="text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded">
+                    {note.className || 'All Classes'}
+                  </span>
+                </div>
                 <h4 className="font-bold text-base text-slate-900 dark:text-white">
                   {note.title}
                 </h4>
@@ -206,16 +215,22 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
               </div>
 
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-xs">
-                <span className="text-slate-400">{note.fileSize}</span>
+                <span className="text-slate-400 font-mono text-[11px]">{note.fileSize || 'PDF Document'}</span>
                 <button
-                  onClick={() => alert(`Downloading "${note.title}" PDF`)}
-                  className="bg-slate-900 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5"
+                  onClick={() => alert(`Downloading "${note.title}" (${note.className})`)}
+                  className="bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 text-white dark:text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm"
                 >
-                  <Download className="w-3.5 h-3.5" /> Download PDF
+                  <Download className="w-3.5 h-3.5" /> Download Note
                 </button>
               </div>
             </div>
           ))}
+
+          {studentNotes.length === 0 && (
+            <div className="md:col-span-2 p-8 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 text-xs text-slate-500">
+              No lecture notes have been published for your class yet. Check back soon!
+            </div>
+          )}
         </div>
       )}
 

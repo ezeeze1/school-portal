@@ -64,6 +64,9 @@ interface SchoolContextType {
   updateSystemSettings: (settings: Partial<SystemSessionTerm>) => void;
   adminCredentials: AdminCredentials;
   updateAdminCredentials: (credentials: Partial<AdminCredentials>) => void;
+  academicSessions: string[];
+  addAcademicSession: (session: string) => void;
+  deleteAcademicSession: (session: string) => void;
 
   // Data Collections
   students: Student[];
@@ -123,7 +126,11 @@ interface SchoolContextType {
 
   // Assignments & Notes
   createAssignment: (asg: Omit<Assignment, 'id'>) => void;
+  addAssignment: (asg: Omit<Assignment, 'id'>) => void;
+  deleteAssignment: (id: string) => void;
   createStudyNote: (note: Omit<StudyNote, 'id'>) => void;
+  addStudyNote: (note: Omit<StudyNote, 'id'>) => void;
+  deleteStudyNote: (id: string) => void;
 
   // Website Content
   addNewsItem: (news: Omit<NewsItem, 'id'>) => void;
@@ -172,7 +179,18 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Load state from local storage or initial mock data
   const [systemSettings, setSystemSettings] = useState<SystemSessionTerm>(() => {
     const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_settings`);
-    return saved ? JSON.parse(saved) : initialSystemSettings;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (!parsed.academicSessions || !Array.isArray(parsed.academicSessions) || parsed.academicSessions.length === 0) {
+          parsed.academicSessions = ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
+        }
+        return parsed;
+      } catch (e) {
+        return initialSystemSettings;
+      }
+    }
+    return initialSystemSettings;
   });
 
   const [students, setStudents] = useState<Student[]>(() => {
@@ -541,14 +559,46 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCbtAttempts((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const addAcademicSession = (newSession: string) => {
+    const cleaned = newSession.trim();
+    if (!cleaned) return;
+    setSystemSettings((prev) => {
+      const existing = prev.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
+      if (existing.includes(cleaned)) return prev;
+      return {
+        ...prev,
+        academicSessions: [cleaned, ...existing],
+      };
+    });
+  };
+
+  const deleteAcademicSession = (sessionToDelete: string) => {
+    setSystemSettings((prev) => {
+      const existing = prev.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
+      const filtered = existing.filter((s) => s !== sessionToDelete);
+      return {
+        ...prev,
+        academicSessions: filtered.length > 0 ? filtered : [prev.currentSession],
+      };
+    });
+  };
+
   const createAssignment = (asg: Omit<Assignment, 'id'>) => {
     const id = `asg-${Date.now()}`;
     setAssignments((prev) => [...prev, { ...asg, id }]);
   };
 
+  const deleteAssignment = (id: string) => {
+    setAssignments((prev) => prev.filter((a) => a.id !== id));
+  };
+
   const createStudyNote = (note: Omit<StudyNote, 'id'>) => {
     const id = `note-${Date.now()}`;
     setStudyNotes((prev) => [...prev, { ...note, id }]);
+  };
+
+  const deleteStudyNote = (id: string) => {
+    setStudyNotes((prev) => prev.filter((n) => n.id !== id));
   };
 
   const addNewsItem = (news: Omit<NewsItem, 'id'>) => {
@@ -634,6 +684,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateSystemSettings,
         adminCredentials,
         updateAdminCredentials,
+        academicSessions: systemSettings.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'],
+        addAcademicSession,
+        deleteAcademicSession,
         students,
         teachers,
         parents,
@@ -675,7 +728,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         submitCBTAttempt,
         deleteCBTAttempt,
         createAssignment,
+        addAssignment: createAssignment,
+        deleteAssignment,
         createStudyNote,
+        addStudyNote: createStudyNote,
+        deleteStudyNote,
         addNewsItem,
         addGalleryImage,
         addDownloadDocument,

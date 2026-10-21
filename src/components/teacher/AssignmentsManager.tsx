@@ -5,7 +5,7 @@ import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileC
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AssignmentsManager: React.FC = () => {
-  const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, classes, subjects } = useSchool();
+  const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects } = useSchool();
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
   const [assignmentToDelete, setAssignmentToDelete] = useState<Assignment | null>(null);
 
@@ -22,10 +22,43 @@ export const AssignmentsManager: React.FC = () => {
   const [asgFileSize, setAsgFileSize] = useState('');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Note Form State
+  // Note Form State with Class Selection
   const [noteTitle, setNoteTitle] = useState('');
+  const [noteClassId, setNoteClassId] = useState('c-ss2');
   const [noteSubjId, setNoteSubjId] = useState('sub-mth');
   const [noteDesc, setNoteDesc] = useState('');
+  const [noteAttachmentName, setNoteAttachmentName] = useState('');
+  const [noteAttachmentUrl, setNoteAttachmentUrl] = useState('');
+  const [noteFileSize, setNoteFileSize] = useState('');
+  const [noteFilterClass, setNoteFilterClass] = useState('all');
+  const [noteToDelete, setNoteToDelete] = useState<StudyNote | null>(null);
+
+  // File Upload Handler for Lecture Notes
+  const handleNoteFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileName = file.name;
+    const fileBytes = file.size;
+    const sizeInMB = (fileBytes / (1024 * 1024)).toFixed(2);
+
+    setNoteAttachmentName(fileName);
+    if (fileName.toLowerCase().endsWith('.pdf')) {
+      setNoteFileSize(`${sizeInMB} MB PDF Document`);
+    } else if (fileName.toLowerCase().endsWith('.doc') || fileName.toLowerCase().endsWith('.docx')) {
+      setNoteFileSize(`${sizeInMB} MB Word Document`);
+    } else {
+      setNoteFileSize(`${sizeInMB} MB Document`);
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setNoteAttachmentUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   // File Upload Handler for Word/PDF/Text files
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -109,24 +142,37 @@ export const AssignmentsManager: React.FC = () => {
 
   const handleCreateNote = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!noteTitle.trim()) {
+      alert('Please enter a lecture note title.');
+      return;
+    }
+
     const subj = subjects.find((s) => s.id === noteSubjId);
+    const cls = classes.find((c) => c.id === noteClassId);
+    const targetClassName = noteClassId === 'all' ? 'All Classes' : (cls?.name || 'SS 2');
 
     const newNote: Omit<StudyNote, 'id'> = {
-      title: noteTitle,
+      title: noteTitle.trim(),
       subjectId: noteSubjId,
       subjectName: subj?.name || 'Mathematics',
-      classId: 'c-ss2',
-      className: 'SS 2',
+      classId: noteClassId,
+      className: targetClassName,
       teacherId: 'tch-102',
-      description: noteDesc,
-      fileUrl: '#',
-      fileSize: '2.4 MB PDF',
+      teacherName: 'Dr. (Mrs.) Victoria Adebayo',
+      description: noteDesc.trim(),
+      fileUrl: noteAttachmentUrl || '#',
+      fileSize: noteFileSize || (noteAttachmentName ? `${noteAttachmentName}` : '2.4 MB PDF Document'),
       uploadDate: new Date().toISOString().split('T')[0],
     };
 
     addStudyNote(newNote);
     setNoteTitle('');
     setNoteDesc('');
+    setNoteAttachmentName('');
+    setNoteAttachmentUrl('');
+    setNoteFileSize('');
+    setSuccessMsg(`Lecture Note "${newNote.title}" uploaded successfully for ${targetClassName}!`);
+    setTimeout(() => setSuccessMsg(null), 4000);
   };
 
   return (
@@ -448,64 +494,176 @@ export const AssignmentsManager: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Note Upload Form */}
           <form onSubmit={handleCreateNote} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 shadow-md">
-            <h3 className="font-serif font-bold text-lg text-slate-900 dark:text-white">Upload New Lecture Note</h3>
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="font-serif font-bold text-lg text-slate-900 dark:text-white flex items-center gap-2">
+                <Upload className="w-5 h-5 text-amber-500" /> Upload New Lecture Note
+              </h3>
+            </div>
             
-            <div className="space-y-3 text-xs">
+            <div className="space-y-3.5 text-xs">
               <div>
-                <label className="block font-semibold mb-1">Note Title</label>
+                <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                  Note Title <span className="text-rose-500">*</span>
+                </label>
                 <input
                   type="text"
                   required
                   value={noteTitle}
                   onChange={(e) => setNoteTitle(e.target.value)}
-                  placeholder="e.g. Calculus & Vectors Chapter 4"
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  placeholder="e.g. Calculus & Vectors Chapter 4, Waves & Optics"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                 />
               </div>
 
+              {/* Select Class */}
               <div>
-                <label className="block font-semibold mb-1">Subject</label>
+                <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                  Select Class <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={noteClassId}
+                  onChange={(e) => setNoteClassId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium text-slate-900 dark:text-white"
+                >
+                  <option value="all">All Classes (General School Study Material)</option>
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">Students enrolled in this class will access this note in their student portal.</p>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                  Subject <span className="text-rose-500">*</span>
+                </label>
                 <select
                   value={noteSubjId}
                   onChange={(e) => setNoteSubjId(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium text-slate-900 dark:text-white"
                 >
                   {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
 
+              {/* Document / PDF Attachment Upload */}
               <div>
-                <label className="block font-semibold mb-1">Summary Note Description</label>
+                <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                  Attach PDF or Document File
+                </label>
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt"
+                    onChange={handleNoteFileUpload}
+                    className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-slate-900 file:text-white dark:file:bg-amber-500 dark:file:text-slate-950 hover:file:opacity-90 cursor-pointer border border-slate-300 dark:border-slate-700 rounded-xl p-1 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                {noteAttachmentName && (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Attached: {noteAttachmentName} ({noteFileSize})
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
+                  Summary & Key Takeaways <span className="text-rose-500">*</span>
+                </label>
                 <textarea
                   required
                   rows={3}
                   value={noteDesc}
                   onChange={(e) => setNoteDesc(e.target.value)}
-                  placeholder="Topic summary..."
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  placeholder="Outline key learning objectives, required formulas, or revision summaries covered in this lecture note..."
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 text-white dark:text-slate-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2"
+                className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-all shadow-md hover:shadow-lg"
               >
-                <Upload className="w-4 h-4" /> Publish PDF Study Note
+                <Upload className="w-4 h-4" /> Publish Lecture Study Note
               </button>
             </div>
           </form>
 
           {/* Notes List */}
           <div className="lg:col-span-2 space-y-4">
-            {studyNotes.map((note) => (
-              <div key={note.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-2 shadow-sm">
-                <span className="text-[10px] font-bold uppercase bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded">
-                  {note.subjectName}
-                </span>
-                <h4 className="font-bold text-base text-slate-900 dark:text-white">{note.title}</h4>
-                <p className="text-xs text-slate-500">{note.description}</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
+              <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                Published Lecture Notes ({studyNotes.length})
+              </h4>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-500 text-[11px] font-medium">Filter by Class:</span>
+                <select
+                  value={noteFilterClass}
+                  onChange={(e) => setNoteFilterClass(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value="all">All Classes</option>
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
               </div>
-            ))}
+            </div>
+
+            {studyNotes
+              .filter((n) => {
+                if (noteFilterClass === 'all') return true;
+                return n.classId === noteFilterClass || n.classId === 'all';
+              })
+              .map((note) => (
+                <div key={note.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-3 shadow-sm hover:border-amber-500/40 transition-all">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold uppercase bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 px-2.5 py-0.5 rounded">
+                        {note.subjectName}
+                      </span>
+                      <span className="text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2.5 py-0.5 rounded">
+                        Class: {note.className || 'All Classes'}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      Uploaded on {note.uploadDate}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 dark:text-white">{note.title}</h4>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{note.description}</p>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      {note.fileSize || 'PDF Document'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => alert(`Opening / downloading ${note.title} (${note.className})`)}
+                        className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold px-3 py-1.5 rounded-xl text-[11px] flex items-center gap-1.5 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Download
+                      </button>
+                      <button
+                        onClick={() => setNoteToDelete(note)}
+                        className="text-rose-500 hover:text-rose-700 font-bold p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                        title="Remove Lecture Note"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+            {studyNotes.filter((n) => noteFilterClass === 'all' || n.classId === noteFilterClass || n.classId === 'all').length === 0 && (
+              <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500">
+                No lecture notes found for the selected class filter. Use the form on the left to upload one.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -523,6 +681,21 @@ export const AssignmentsManager: React.FC = () => {
         title="Confirm Assignment Removal"
         message="Are you sure you want to delete this homework assignment from the portal?"
         itemName={assignmentToDelete ? assignmentToDelete.title : undefined}
+      />
+
+      {/* Confirmation Modal for Lecture Note Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!noteToDelete}
+        onClose={() => setNoteToDelete(null)}
+        onConfirm={() => {
+          if (noteToDelete) {
+            deleteStudyNote(noteToDelete.id);
+            setNoteToDelete(null);
+          }
+        }}
+        title="Confirm Lecture Note Removal"
+        message="Are you sure you want to delete this lecture note from the portal?"
+        itemName={noteToDelete ? `${noteToDelete.title} (${noteToDelete.className})` : undefined}
       />
     </div>
   );

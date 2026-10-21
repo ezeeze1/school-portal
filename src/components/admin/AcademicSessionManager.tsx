@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles, Key, Eye, EyeOff, UserCheck, AlertCircle } from 'lucide-react';
+import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles, Key, Eye, EyeOff, UserCheck, AlertCircle, Plus, Trash2, Calendar, ArrowRight } from 'lucide-react';
+import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AcademicSessionManager: React.FC = () => {
-  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials } = useSchool();
+  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials, academicSessions, addAcademicSession, deleteAcademicSession } = useSchool();
   const [activeSettingsTab, setActiveSettingsTab] = useState<'academic' | 'security' | 'general'>('academic');
   const [generalSection, setGeneralSection] = useState<'identity' | 'hero' | 'stats' | 'about'>('identity');
 
@@ -22,6 +23,75 @@ export const AcademicSessionManager: React.FC = () => {
   const [term, setTerm] = useState(systemSettings.currentTerm);
   const [isResultPublished, setIsResultPublished] = useState(systemSettings.isResultPublished);
   const [saved, setSaved] = useState(false);
+
+  // Add New Academic Session State
+  const [isAddingSession, setIsAddingSession] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const [makeNewSessionActive, setMakeNewSessionActive] = useState(true);
+  const [sessionAddError, setSessionAddError] = useState<string | null>(null);
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+
+  // Consolidated list of available sessions
+  const allSessions = useMemo(() => {
+    const list = academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
+    return Array.from(new Set([session, ...list]));
+  }, [session, academicSessions]);
+
+  // Suggested next sessions for quick click
+  const suggestedSessions = useMemo(() => {
+    const years: number[] = [];
+    allSessions.forEach((s) => {
+      const matches = s.match(/\b(20\d\d)\b/g);
+      if (matches) {
+        matches.forEach((m) => years.push(parseInt(m, 10)));
+      }
+    });
+    const maxYear = years.length > 0 ? Math.max(...years) : 2026;
+    const candidates = [
+      `${maxYear}/${maxYear + 1}`,
+      `${maxYear + 1}/${maxYear + 2}`,
+      `${maxYear + 2}/${maxYear + 3}`,
+    ];
+    return candidates.filter((c) => !allSessions.includes(c));
+  }, [allSessions]);
+
+  const handleAddNewSession = () => {
+    setSessionAddError(null);
+    const cleaned = newSessionName.trim();
+    if (!cleaned) {
+      setSessionAddError('Please enter a session year range (e.g. 2026/2027).');
+      return;
+    }
+
+    if (allSessions.includes(cleaned)) {
+      setSessionAddError(`Session "${cleaned}" already exists in the system.`);
+      return;
+    }
+
+    addAcademicSession(cleaned);
+    if (makeNewSessionActive) {
+      setSession(cleaned);
+      updateSystemSettings({ currentSession: cleaned });
+    }
+    setNewSessionName('');
+    setIsAddingSession(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 4000);
+  };
+
+  const handleSwitchSessionDirectly = (targetSession: string) => {
+    setSession(targetSession);
+    updateSystemSettings({ currentSession: targetSession });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const handleDeleteSessionConfirmed = () => {
+    if (sessionToDelete) {
+      deleteAcademicSession(sessionToDelete);
+      setSessionToDelete(null);
+    }
+  };
 
   // General settings state
   const [schoolName, setSchoolName] = useState(systemSettings.schoolName || '');
@@ -185,63 +255,262 @@ export const AcademicSessionManager: React.FC = () => {
       )}
 
       {activeSettingsTab === 'academic' ? (
-        <form onSubmit={handleSaveAcademic} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-6 shadow-xl">
-          <h2 className="font-serif font-bold text-xl text-slate-900 dark:text-white flex items-center gap-2">
-            <Settings className="w-5 h-5 text-amber-500" /> Academic Term & Result Publication Control
-          </h2>
-
-          <div className="space-y-4 text-xs">
-            <div>
-              <label className="block font-semibold mb-1">Active Academic Session</label>
-              <select
-                value={session}
-                onChange={(e) => setSession(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white"
-              >
-                <option value="2025/2026">2025/2026 Session</option>
-                <option value="2024/2025">2024/2025 Session</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-semibold mb-1">Active Academic Term</label>
-              <select
-                value={term}
-                onChange={(e) => setTerm(e.target.value as any)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white"
-              >
-                <option value="1st Term">1st Term</option>
-                <option value="2nd Term">2nd Term</option>
-                <option value="3rd Term">3rd Term</option>
-              </select>
-            </div>
-
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div className="space-y-6">
+          <form onSubmit={handleSaveAcademic} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-6 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
               <div>
-                <p className="font-bold text-slate-900 dark:text-white">Publish Terminal Results to Student & Parent Portals</p>
-                <p className="text-[11px] text-slate-500">When enabled, students and parents can view and print report cards.</p>
+                <h2 className="font-serif font-bold text-xl text-slate-900 dark:text-white flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-amber-500" /> Academic Term & Session Control
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">Configure active school year sessions, terms, and report card publications.</p>
+              </div>
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-3.5 py-1.5 flex items-center gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                <span>Current: {systemSettings.currentSession} ({systemSettings.currentTerm})</span>
+              </div>
+            </div>
+
+            <div className="space-y-5 text-xs">
+              {/* Active Academic Session Section with Add New */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-amber-500" /> Active Academic Session
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingSession(!isAddingSession);
+                      setSessionAddError(null);
+                    }}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    {isAddingSession ? 'Close Creator' : 'Add New Session'}
+                  </button>
+                </div>
+
+                {/* Inline Add New Session Panel */}
+                {isAddingSession && (
+                  <div className="p-5 bg-amber-500/10 dark:bg-amber-500/5 border border-amber-500/30 rounded-2xl space-y-3.5 animate-fade-in">
+                    <div className="flex items-center justify-between">
+                      <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2 text-sm">
+                        <Plus className="w-4 h-4 text-amber-500" /> Create New Academic Session
+                      </p>
+                      <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400 bg-amber-200 dark:bg-amber-950/80 px-2 py-0.5 rounded">
+                        New Session Entry
+                      </span>
+                    </div>
+
+                    {sessionAddError && (
+                      <div className="p-3 bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 rounded-xl text-xs font-semibold flex items-center gap-2 border border-rose-300 dark:border-rose-800">
+                        <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                        <span>{sessionAddError}</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                        Session Year Range <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={newSessionName}
+                        onChange={(e) => {
+                          setNewSessionName(e.target.value);
+                          setSessionAddError(null);
+                        }}
+                        placeholder="e.g. 2026/2027 or 2027/2028"
+                        className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-bold font-mono text-slate-900 dark:text-white outline-none focus:border-amber-500"
+                      />
+
+                      {/* Quick Suggestion Pills */}
+                      {suggestedSessions.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] text-slate-500 font-medium">Quick suggestions:</span>
+                          {suggestedSessions.map((sug) => (
+                            <button
+                              key={sug}
+                              type="button"
+                              onClick={() => {
+                                setNewSessionName(sug);
+                                setSessionAddError(null);
+                              }}
+                              className="text-[10px] font-bold font-mono px-2 py-0.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                            >
+                              + {sug}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        type="checkbox"
+                        id="makeActiveCheck"
+                        checked={makeNewSessionActive}
+                        onChange={(e) => setMakeNewSessionActive(e.target.checked)}
+                        className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
+                      />
+                      <label htmlFor="makeActiveCheck" className="text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                        Immediately activate this session for the school portal
+                      </label>
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={handleAddNewSession}
+                        className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Save & Register Session
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddingSession(false);
+                          setSessionAddError(null);
+                        }}
+                        className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-3 py-2 rounded-xl text-xs hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Session Select Dropdown */}
+                <select
+                  value={session}
+                  onChange={(e) => setSession(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white"
+                >
+                  {allSessions.map((s) => (
+                    <option key={s} value={s}>
+                      {s} Session {s === systemSettings.currentSession ? '★ [Current Active]' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-500">
+                  Select which academic session governs current score entry, CBT exams, terminal report cards, and student records.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1 text-slate-800 dark:text-slate-200">Active Academic Term</label>
+                <select
+                  value={term}
+                  onChange={(e) => setTerm(e.target.value as any)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white"
+                >
+                  <option value="1st Term">1st Term</option>
+                  <option value="2nd Term">2nd Term</option>
+                  <option value="3rd Term">3rd Term</option>
+                </select>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-slate-900 dark:text-white">Publish Terminal Results to Student & Parent Portals</p>
+                  <p className="text-[11px] text-slate-500">When enabled, students and parents can view and print report cards.</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsResultPublished(!isResultPublished)}
+                  className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors ${
+                    isResultPublished ? 'bg-emerald-600 text-white' : 'bg-slate-300 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  {isResultPublished ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                  {isResultPublished ? 'Results Published' : 'Results Locked'}
+                </button>
               </div>
 
               <button
-                type="button"
-                onClick={() => setIsResultPublished(!isResultPublished)}
-                className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors ${
-                  isResultPublished ? 'bg-emerald-600 text-white' : 'bg-slate-300 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-                }`}
+                type="submit"
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
               >
-                {isResultPublished ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                {isResultPublished ? 'Results Published' : 'Results Locked'}
+                <Save className="w-4 h-4" /> Save System Settings
               </button>
             </div>
+          </form>
 
-            <button
-              type="submit"
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
-            >
-              <Save className="w-4 h-4" /> Save System Settings
-            </button>
+          {/* Academic Sessions Directory Management Card */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-4 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-slate-900 dark:text-white flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-amber-500" /> Academic Sessions Directory
+                </h3>
+                <p className="text-xs text-slate-500">Manage all configured school years or fast-switch the active academic session.</p>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl">
+                {allSessions.length} Sessions Configured
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs">
+              {allSessions.map((s) => {
+                const isActive = s === systemSettings.currentSession;
+                return (
+                  <div
+                    key={s}
+                    className={`p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                      isActive
+                        ? 'bg-amber-500/10 dark:bg-amber-500/5 border-amber-500/40 shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="font-mono font-bold text-sm text-slate-900 dark:text-white block">
+                          {s} Session
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          {isActive ? 'Primary System Session' : 'Historical / Available'}
+                        </span>
+                      </div>
+                      {isActive && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Active
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+                      {!isActive ? (
+                        <button
+                          type="button"
+                          onClick={() => handleSwitchSessionDirectly(s)}
+                          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold rounded-lg text-[11px] flex items-center gap-1 transition-all"
+                        >
+                          Make Active <ArrowRight className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          Currently Active
+                        </span>
+                      )}
+
+                      {!isActive && (
+                        <button
+                          type="button"
+                          onClick={() => setSessionToDelete(s)}
+                          className="p-1.5 text-rose-500 hover:text-rose-700 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                          title="Delete Session"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </form>
+        </div>
       ) : activeSettingsTab === 'security' ? (
         <form onSubmit={handleSaveAdminSecurity} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-6 shadow-xl animate-fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
@@ -799,6 +1068,15 @@ export const AcademicSessionManager: React.FC = () => {
         </form>
       )}
 
+      {/* Confirmation Modal for Session Deletion */}
+      <ConfirmDeleteModal
+        isOpen={!!sessionToDelete}
+        onClose={() => setSessionToDelete(null)}
+        onConfirm={handleDeleteSessionConfirmed}
+        title="Confirm Academic Session Removal"
+        message="Are you sure you want to delete this academic session from the system directory? Archived scores will remain unaffected, but this session will no longer appear in selectors."
+        itemName={sessionToDelete ? `${sessionToDelete} Academic Session` : undefined}
+      />
     </div>
   );
 };

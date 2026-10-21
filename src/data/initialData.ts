@@ -23,6 +23,7 @@ import {
 
 export const initialSystemSettings: SystemSessionTerm = {
   currentSession: '2025/2026',
+  academicSessions: ['2026/2027', '2025/2026', '2024/2025', '2023/2024'],
   currentTerm: '2nd Term',
   resultEntryOpen: true,
   cbtActive: true,

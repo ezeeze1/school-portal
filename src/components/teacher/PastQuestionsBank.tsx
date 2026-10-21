@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 
 export const PastQuestionsBank: React.FC = () => {
-  const { cbtExams, classes, subjects, createCBTExam, updateCBTExam, deleteCBTExam } = useSchool();
+  const { cbtExams, classes, subjects, createCBTExam, updateCBTExam, deleteCBTExam, academicSessions } = useSchool();
 
   // Filters State
   const [selectedClass, setSelectedClass] = useState<string>('all');
@@ -59,7 +59,7 @@ export const PastQuestionsBank: React.FC = () => {
   ]);
 
   const termsList = ['1st Term', '2nd Term', '3rd Term'];
-  const sessionsList = ['2025/2026', '2024/2025', '2023/2024', '2022/2023'];
+  const sessionsList = academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
 
   // Filter Logic
   const filteredExams = cbtExams.filter((exam) => {
