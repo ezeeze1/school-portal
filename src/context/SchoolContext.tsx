@@ -46,6 +46,8 @@ import {
   sampleAnnouncements,
   sampleFeeRecords
 } from '../data/initialData';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { supabaseSchoolService } from '../services/supabaseSchoolService';
 
 interface SchoolContextType {
   // Auth & Session State
@@ -278,10 +280,53 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return saved ? JSON.parse(saved) : sampleAnnouncements;
   });
 
-  const [feeRecords] = useState<FeeRecord[]>(() => {
+  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() => {
     const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_fees`);
     return saved ? JSON.parse(saved) : sampleFeeRecords;
   });
+
+  // Hydrate existing data from Supabase if configured (non-destructive: never overwrites with sample data)
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    let isMounted = true;
+    supabaseSchoolService.fetchPortalSnapshot().then((snapshot) => {
+      if (!isMounted) return;
+      if (snapshot.systemSettings) {
+        setSystemSettings((prev) => ({
+          ...prev,
+          ...snapshot.systemSettings,
+          academicSessions:
+            snapshot.systemSettings?.academicSessions &&
+            snapshot.systemSettings.academicSessions.length > 0
+              ? snapshot.systemSettings.academicSessions
+              : prev.academicSessions,
+        }));
+      }
+      if (snapshot.students) setStudents(snapshot.students);
+      if (snapshot.teachers) setTeachers(snapshot.teachers);
+      if (snapshot.parents) setParents(snapshot.parents);
+      if (snapshot.classes) setClasses(snapshot.classes);
+      if (snapshot.subjects) setSubjects(snapshot.subjects);
+      if (snapshot.scores) setScores(snapshot.scores);
+      if (snapshot.results) setResults(snapshot.results);
+      if (snapshot.attendance) setAttendance(snapshot.attendance);
+      if (snapshot.cbtExams) setCbtExams(snapshot.cbtExams);
+      if (snapshot.cbtAttempts) setCbtAttempts(snapshot.cbtAttempts);
+      if (snapshot.assignments) setAssignments(snapshot.assignments);
+      if (snapshot.studyNotes) setStudyNotes(snapshot.studyNotes);
+      if (snapshot.newsItems) setNewsItems(snapshot.newsItems);
+      if (snapshot.galleryImages) setGalleryImages(snapshot.galleryImages);
+      if (snapshot.applications) setApplications(snapshot.applications);
+      if (snapshot.downloads) setDownloads(snapshot.downloads);
+      if (snapshot.announcements) setAnnouncements(snapshot.announcements);
+      if (snapshot.feeRecords) setFeeRecords(snapshot.feeRecords);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Persist handlers
   useEffect(() => {
@@ -395,7 +440,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const updateSystemSettings = (updated: Partial<SystemSessionTerm>) => {
-    setSystemSettings((prev) => ({ ...prev, ...updated }));
+    setSystemSettings((prev) => {
+      const next = { ...prev, ...updated };
+      void supabaseSchoolService.upsertSystemSettings(next);
+      return next;
+    });
   };
 
   const updateAdminCredentials = (updated: Partial<AdminCredentials>) => {
@@ -415,11 +464,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // CRUD Implementations
   const addStudent = (newStudent: Omit<Student, 'id'>) => {
     const id = `std-${Date.now()}`;
-    setStudents((prev) => [...prev, { ...newStudent, id }]);
+    const created = { ...newStudent, id };
+    setStudents((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertStudent(created);
   };
 
   const updateStudent = (id: string, updated: Partial<Student>) => {
-    setStudents((prev) => prev.map((s) => (s.id === id ? { ...s, ...updated } : s)));
+    setStudents((prev) =>
+      prev.map((s) => {
+        if (s.id !== id) return s;
+        const next = { ...s, ...updated };
+        void supabaseSchoolService.upsertStudent(next);
+        return next;
+      })
+    );
   };
 
   const generateAlphanumericPasscode = () => {
@@ -434,54 +492,85 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const generateResultPasscodeForStudent = (studentId: string): string => {
     const newCode = generateAlphanumericPasscode();
     setStudents((prev) =>
-      prev.map((s) => (s.id === studentId ? { ...s, resultPasscode: newCode } : s))
+      prev.map((s) => {
+        if (s.id !== studentId) return s;
+        const next = { ...s, resultPasscode: newCode };
+        void supabaseSchoolService.upsertStudent(next);
+        return next;
+      })
     );
     return newCode;
   };
 
   const bulkGenerateResultPasscodes = () => {
-    setStudents((prev) =>
-      prev.map((s) => ({
+    setStudents((prev) => {
+      const nextList = prev.map((s) => ({
         ...s,
         resultPasscode: s.resultPasscode || generateAlphanumericPasscode(),
-      }))
-    );
+      }));
+      void supabaseSchoolService.upsertStudents(nextList);
+      return nextList;
+    });
   };
 
   const deleteStudent = (id: string) => {
     setStudents((prev) => prev.filter((s) => s.id !== id));
+    void supabaseSchoolService.deleteStudent(id);
   };
 
   const addTeacher = (newTeacher: Omit<Teacher, 'id'>) => {
     const id = `tch-${Date.now()}`;
-    setTeachers((prev) => [...prev, { ...newTeacher, id }]);
+    const created = { ...newTeacher, id };
+    setTeachers((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertTeacher(created);
   };
 
   const updateTeacher = (id: string, updated: Partial<Teacher>) => {
-    setTeachers((prev) => prev.map((t) => (t.id === id ? { ...t, ...updated } : t)));
+    setTeachers((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        const next = { ...t, ...updated };
+        void supabaseSchoolService.upsertTeacher(next);
+        return next;
+      })
+    );
   };
 
   const deleteTeacher = (id: string) => {
     setTeachers((prev) => prev.filter((t) => t.id !== id));
+    void supabaseSchoolService.deleteTeacher(id);
   };
 
   const addParent = (newParent: Omit<Parent, 'id'>) => {
     const id = `prt-${Date.now()}`;
-    setParents((prev) => [...prev, { ...newParent, id }]);
+    const created = { ...newParent, id };
+    setParents((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertParent(created);
   };
 
   const updateParent = (id: string, updated: Partial<Parent>) => {
-    setParents((prev) => prev.map((p) => (p.id === id ? { ...p, ...updated } : p)));
+    setParents((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const next = { ...p, ...updated };
+        void supabaseSchoolService.upsertParent(next);
+        return next;
+      })
+    );
   };
 
   const addClass = (cls: Omit<SchoolClass, 'id'>) => {
     const id = `cls-${Date.now()}`;
-    setClasses((prev) => [...prev, { ...cls, id }]);
+    const created = { ...cls, id };
+    setClasses((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertClass(created);
   };
 
   const addSubject = (subj: Omit<Subject, 'id'>) => {
     const id = `sub-${Date.now()}`;
-    setSubjects((prev) => [...prev, { ...subj, id }]);
+    const created = { ...subj, id };
+    setSubjects((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertSubject(created);
   };
 
   const saveScore = (scoreData: Omit<ScoreRecord, 'id'>) => {
@@ -495,10 +584,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       );
       if (existingIdx >= 0) {
         const updated = [...prev];
-        updated[existingIdx] = { ...scoreData, id: prev[existingIdx].id };
+        const nextScore = { ...scoreData, id: prev[existingIdx].id };
+        updated[existingIdx] = nextScore;
+        void supabaseSchoolService.upsertScore(nextScore);
         return updated;
       }
-      return [...prev, { ...scoreData, id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` }];
+      const created = { ...scoreData, id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` };
+      void supabaseSchoolService.upsertScore(created);
+      return [...prev, created];
     });
   };
 
@@ -507,6 +600,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const publishResult = (resultData: TerminalResult) => {
+    void supabaseSchoolService.upsertResult(resultData);
     setResults((prev) => {
       const idx = prev.findIndex(
         (r) =>
@@ -529,34 +623,49 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     }));
     setAttendance((prev) => [...prev, ...newRecords]);
+    void supabaseSchoolService.upsertAttendanceBatch(newRecords);
   };
 
   const createCBTExam = (exam: Omit<CBTExam, 'id'>) => {
     const id = `cbt-${Date.now()}`;
-    setCbtExams((prev) => [...prev, { ...exam, id }]);
+    const created = { ...exam, id };
+    setCbtExams((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertCBTExam(created);
   };
 
   const updateCBTExam = (id: string, updated: Partial<CBTExam>) => {
-    setCbtExams((prev) => prev.map((e) => (e.id === id ? { ...e, ...updated } : e)));
+    setCbtExams((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        const next = { ...e, ...updated };
+        void supabaseSchoolService.upsertCBTExam(next);
+        return next;
+      })
+    );
   };
 
   const deleteCBTExam = (id: string) => {
     setCbtExams((prev) => prev.filter((e) => e.id !== id));
     setCbtAttempts((prev) => prev.filter((a) => a.examId !== id));
+    void supabaseSchoolService.deleteCBTExam(id);
   };
 
   const deleteMultipleCBTExams = (ids: string[]) => {
     setCbtExams((prev) => prev.filter((e) => !ids.includes(e.id)));
     setCbtAttempts((prev) => prev.filter((a) => !ids.includes(a.examId)));
+    void supabaseSchoolService.deleteMultipleCBTExams(ids);
   };
 
   const submitCBTAttempt = (attempt: Omit<CBTAttempt, 'id'>) => {
     const id = `attmpt-${Date.now()}`;
-    setCbtAttempts((prev) => [...prev, { ...attempt, id }]);
+    const created = { ...attempt, id };
+    setCbtAttempts((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertCBTAttempt(created);
   };
 
   const deleteCBTAttempt = (id: string) => {
     setCbtAttempts((prev) => prev.filter((a) => a.id !== id));
+    void supabaseSchoolService.deleteCBTAttempt(id);
   };
 
   const addAcademicSession = (newSession: string) => {
@@ -565,10 +674,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setSystemSettings((prev) => {
       const existing = prev.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
       if (existing.includes(cleaned)) return prev;
-      return {
+      const next = {
         ...prev,
         academicSessions: [cleaned, ...existing],
       };
+      void supabaseSchoolService.upsertSystemSettings(next);
+      return next;
     });
   };
 
@@ -576,44 +687,58 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setSystemSettings((prev) => {
       const existing = prev.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
       const filtered = existing.filter((s) => s !== sessionToDelete);
-      return {
+      const next = {
         ...prev,
         academicSessions: filtered.length > 0 ? filtered : [prev.currentSession],
       };
+      void supabaseSchoolService.upsertSystemSettings(next);
+      return next;
     });
   };
 
   const createAssignment = (asg: Omit<Assignment, 'id'>) => {
     const id = `asg-${Date.now()}`;
-    setAssignments((prev) => [...prev, { ...asg, id }]);
+    const created = { ...asg, id };
+    setAssignments((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertAssignment(created);
   };
 
   const deleteAssignment = (id: string) => {
     setAssignments((prev) => prev.filter((a) => a.id !== id));
+    void supabaseSchoolService.deleteAssignment(id);
   };
 
   const createStudyNote = (note: Omit<StudyNote, 'id'>) => {
     const id = `note-${Date.now()}`;
-    setStudyNotes((prev) => [...prev, { ...note, id }]);
+    const created = { ...note, id };
+    setStudyNotes((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertStudyNote(created);
   };
 
   const deleteStudyNote = (id: string) => {
     setStudyNotes((prev) => prev.filter((n) => n.id !== id));
+    void supabaseSchoolService.deleteStudyNote(id);
   };
 
   const addNewsItem = (news: Omit<NewsItem, 'id'>) => {
     const id = `news-${Date.now()}`;
-    setNewsItems((prev) => [...prev, { ...news, id }]);
+    const created = { ...news, id };
+    setNewsItems((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertNewsItem(created);
   };
 
   const addGalleryImage = (img: Omit<GalleryImage, 'id'>) => {
     const id = `gal-${Date.now()}`;
-    setGalleryImages((prev) => [...prev, { ...img, id }]);
+    const created = { ...img, id };
+    setGalleryImages((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertGalleryImage(created);
   };
 
   const addDownloadDocument = (doc: Omit<DownloadDocument, 'id'>) => {
     const id = `dl-${Date.now()}`;
-    setDownloads((prev) => [...prev, { ...doc, id }]);
+    const created = { ...doc, id };
+    setDownloads((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertDownloadDocument(created);
   };
 
   const submitOnlineApplication = (
@@ -629,12 +754,18 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       status: 'Pending',
     };
     setApplications((prev) => [newApp, ...prev]);
+    void supabaseSchoolService.upsertApplication(newApp);
     return appNum;
   };
 
   const updateApplicationStatus = (id: string, status: OnlineApplication['status'], notes?: string) => {
     setApplications((prev) =>
-      prev.map((app) => (app.id === id ? { ...app, status, notes: notes || app.notes } : app))
+      prev.map((app) => {
+        if (app.id !== id) return app;
+        const next = { ...app, status, notes: notes || app.notes };
+        void supabaseSchoolService.upsertApplication(next);
+        return next;
+      })
     );
   };
 
@@ -646,6 +777,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       date: new Date().toISOString().split('T')[0],
     };
     setAnnouncements((prev) => [newAnn, ...prev]);
+    void supabaseSchoolService.upsertAnnouncement(newAnn);
   };
 
   const resetToDefaultData = () => {
