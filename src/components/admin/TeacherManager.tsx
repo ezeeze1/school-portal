@@ -30,7 +30,7 @@ const PRESET_SUBJECTS = [
 ];
 
 export const TeacherManager: React.FC = () => {
-  const { teachers, addTeacher, updateTeacher, deleteTeacher } = useSchool();
+  const { teachers, classes, addTeacher, updateTeacher, deleteTeacher } = useSchool();
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [teacherToDelete, setTeacherToDelete] = useState<Teacher | null>(null);
@@ -116,6 +116,15 @@ export const TeacherManager: React.FC = () => {
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const firstName = formData.firstName.trim();
+    const lastName = formData.lastName.trim();
+    const email = formData.email.trim();
+    const phone = formData.phone.trim();
+
+    if (!firstName || !lastName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone) {
+      alert('Please enter valid first name, last name, email address, and phone number.');
+      return;
+    }
     if (selectedClasses.length === 0) {
       alert('Please select or add at least one class taught.');
       return;
@@ -127,21 +136,24 @@ export const TeacherManager: React.FC = () => {
 
     const primaryClass = selectedClasses[0] || 'SS 2 Gold';
     const joinedClasses = selectedClasses.join(', ');
+    const matchedFormClass = classes.find((c) =>
+      primaryClass.toLowerCase().startsWith(c.name.toLowerCase())
+    );
 
     const newTch: Omit<Teacher, 'id'> = {
       staffId: `TCH/2026/${Math.floor(100 + Math.random() * 900)}`,
-      firstName: formData.firstName,
-      lastName: formData.lastName,
-      email: formData.email,
-      phone: formData.phone,
+      firstName,
+      lastName,
+      email,
+      phone,
       subjectsTaught: selectedSubjects,
-      formClassId: 'c-ss2',
+      formClassId: matchedFormClass?.id,
       formClassName: primaryClass,
       classTaught: joinedClasses,
       classesTaught: selectedClasses,
-      password: formData.password,
+      password: formData.password.trim() || 'teacherpass123',
       status: 'Active',
-      avatar: `https://images.unsplash.com/photo-${1544005313 + Math.floor(Math.random() * 1000)}?auto=format&fit=crop&w=300&q=80`,
+      avatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=300&q=80',
     };
 
     addTeacher(newTch);
@@ -186,12 +198,20 @@ export const TeacherManager: React.FC = () => {
 
     const primaryClass = editSelectedClasses[0] || 'SS 2 Gold';
     const joinedClasses = editSelectedClasses.join(', ');
+    const matchedFormClass = classes.find((c) =>
+      primaryClass.toLowerCase().startsWith(c.name.toLowerCase())
+    );
 
     updateTeacher(editingTeacher.id, {
       ...editFormData,
+      firstName: editFormData.firstName?.trim() || editingTeacher.firstName,
+      lastName: editFormData.lastName?.trim() || editingTeacher.lastName,
+      email: editFormData.email?.trim() || editingTeacher.email,
+      phone: editFormData.phone?.trim() || editingTeacher.phone,
       subjectsTaught: editSelectedSubjects,
       classesTaught: editSelectedClasses,
       classTaught: joinedClasses,
+      formClassId: matchedFormClass?.id,
       formClassName: primaryClass,
     });
     setEditingTeacher(null);

@@ -337,7 +337,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
                 </button>
               ) : (
                 <button
-                  onClick={handleCompleteExam}
+                  onClick={() => handleCompleteExam(false)}
                   className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg"
                 >
                   Submit CBT Exam <CheckCircle2 className="w-4 h-4" />
@@ -393,7 +393,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
             </div>
 
             <button
-              onClick={handleCompleteExam}
+              onClick={() => handleCompleteExam(false)}
               className="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 font-bold py-2.5 rounded-xl text-xs transition-colors"
             >
               Finish & Submit Test

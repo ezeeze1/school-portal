@@ -5,7 +5,19 @@ import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileC
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AssignmentsManager: React.FC = () => {
-  const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects } = useSchool();
+  const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects, teachers, currentUser } = useSchool();
+  const matchedTeacher =
+    currentUser?.role === 'teacher'
+      ? teachers.find(
+          (t) =>
+            t.id === currentUser.id ||
+            (currentUser.referenceId && t.staffId === currentUser.referenceId)
+        )
+      : undefined;
+  const resolvedTeacherId = matchedTeacher?.id;
+  const resolvedTeacherName = matchedTeacher
+    ? `${matchedTeacher.firstName} ${matchedTeacher.lastName}`
+    : currentUser?.name || 'School Educator';
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
   const [assignmentToDelete, setAssignmentToDelete] = useState<Assignment | null>(null);
 
@@ -116,8 +128,8 @@ export const AssignmentsManager: React.FC = () => {
       subjectName: subj?.name || 'Mathematics',
       classId: asgClassId,
       className: cls?.name || 'SS 2',
-      teacherId: 'tch-102',
-      teacherName: 'Dr. (Mrs.) Victoria Adebayo',
+      teacherId: resolvedTeacherId,
+      teacherName: resolvedTeacherName,
       description: asgDesc.trim(),
       format: asgFormat,
       content: asgContent.trim() || undefined,
@@ -155,10 +167,10 @@ export const AssignmentsManager: React.FC = () => {
       title: noteTitle.trim(),
       subjectId: noteSubjId,
       subjectName: subj?.name || 'Mathematics',
-      classId: noteClassId,
+      classId: noteClassId === 'all' ? undefined : noteClassId,
       className: targetClassName,
-      teacherId: 'tch-102',
-      teacherName: 'Dr. (Mrs.) Victoria Adebayo',
+      teacherId: resolvedTeacherId,
+      teacherName: resolvedTeacherName,
       description: noteDesc.trim(),
       fileUrl: noteAttachmentUrl || '#',
       fileSize: noteFileSize || (noteAttachmentName ? `${noteAttachmentName}` : '2.4 MB PDF Document'),
@@ -613,7 +625,7 @@ export const AssignmentsManager: React.FC = () => {
             {studyNotes
               .filter((n) => {
                 if (noteFilterClass === 'all') return true;
-                return n.classId === noteFilterClass || n.classId === 'all';
+                return !n.classId || n.classId === 'all' || n.classId === noteFilterClass;
               })
               .map((note) => (
                 <div key={note.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-3 shadow-sm hover:border-amber-500/40 transition-all">
@@ -659,7 +671,7 @@ export const AssignmentsManager: React.FC = () => {
                 </div>
               ))}
 
-            {studyNotes.filter((n) => noteFilterClass === 'all' || n.classId === noteFilterClass || n.classId === 'all').length === 0 && (
+            {studyNotes.filter((n) => noteFilterClass === 'all' || !n.classId || n.classId === 'all' || n.classId === noteFilterClass).length === 0 && (
               <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500">
                 No lecture notes found for the selected class filter. Use the form on the left to upload one.
               </div>

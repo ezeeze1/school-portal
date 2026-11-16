@@ -146,6 +146,11 @@ interface SchoolContextType {
   // Announcements
   sendAnnouncement: (ann: Omit<AnnouncementNotification, 'id' | 'date'>) => void;
 
+  // Fee Records CRUD
+  addFeeRecord: (fee: Omit<FeeRecord, 'id'>) => void;
+  updateFeeRecord: (id: string, updated: Partial<FeeRecord>) => void;
+  deleteFeeRecord: (id: string) => void;
+
   // Reset System Data
   resetToDefaultData: () => void;
 }
@@ -163,12 +168,28 @@ const initialAdminCredentials: AdminCredentials = {
 
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
+      const parsed = saved ? (JSON.parse(saved) as User | null) : null;
+      return parsed && parsed.id && parsed.role ? parsed : null;
+    } catch {
+      return null;
+    }
   });
   const [activeRole, setActiveRole] = useState<UserRole>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_active_role`);
-    return saved ? JSON.parse(saved) : 'public';
+    try {
+      const savedRole = localStorage.getItem(`${LOCAL_STORAGE_KEY}_active_role`);
+      const savedUser = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
+      const parsedRole: UserRole = savedRole ? JSON.parse(savedRole) : 'public';
+      const parsedUser: User | null = savedUser ? JSON.parse(savedUser) : null;
+      // Do not trust activeRole in localStorage unless a matching user session exists
+      if (parsedRole !== 'public' && (!parsedUser || parsedUser.role !== parsedRole)) {
+        return 'public';
+      }
+      return parsedRole;
+    } catch {
+      return 'public';
+    }
   });
   const [currentView, setCurrentView] = useState<string>('home');
 
@@ -349,6 +370,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_apps`, JSON.stringify(applications));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_downloads`, JSON.stringify(downloads));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_announcements`, JSON.stringify(announcements));
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_fees`, JSON.stringify(feeRecords));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_current_user`, JSON.stringify(currentUser));
     localStorage.setItem(`${LOCAL_STORAGE_KEY}_active_role`, JSON.stringify(activeRole));
   }, [
@@ -373,6 +395,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     applications,
     downloads,
     announcements,
+    feeRecords,
   ]);
 
   // Role switching
@@ -573,23 +596,32 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     void supabaseSchoolService.upsertSubject(created);
   };
 
+  const resolveValidTeacherId = (teacherId?: string): string | undefined => {
+    if (!teacherId) return undefined;
+    return teachers.some((t) => t.id === teacherId) ? teacherId : undefined;
+  };
+
   const saveScore = (scoreData: Omit<ScoreRecord, 'id'>) => {
+    const sanitizedScoreData: Omit<ScoreRecord, 'id'> = {
+      ...scoreData,
+      teacherId: resolveValidTeacherId(scoreData.teacherId),
+    };
     setScores((prev) => {
       const existingIdx = prev.findIndex(
         (s) =>
-          s.studentId === scoreData.studentId &&
-          s.subjectId === scoreData.subjectId &&
-          s.sessionId === scoreData.sessionId &&
-          s.term === scoreData.term
+          s.studentId === sanitizedScoreData.studentId &&
+          s.subjectId === sanitizedScoreData.subjectId &&
+          s.sessionId === sanitizedScoreData.sessionId &&
+          s.term === sanitizedScoreData.term
       );
       if (existingIdx >= 0) {
         const updated = [...prev];
-        const nextScore = { ...scoreData, id: prev[existingIdx].id };
+        const nextScore = { ...sanitizedScoreData, id: prev[existingIdx].id };
         updated[existingIdx] = nextScore;
         void supabaseSchoolService.upsertScore(nextScore);
         return updated;
       }
-      const created = { ...scoreData, id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` };
+      const created = { ...sanitizedScoreData, id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` };
       void supabaseSchoolService.upsertScore(created);
       return [...prev, created];
     });
@@ -628,7 +660,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const createCBTExam = (exam: Omit<CBTExam, 'id'>) => {
     const id = `cbt-${Date.now()}`;
-    const created = { ...exam, id };
+    const created: CBTExam = {
+      ...exam,
+      id,
+      teacherId: resolveValidTeacherId(exam.teacherId),
+    };
     setCbtExams((prev) => [...prev, created]);
     void supabaseSchoolService.upsertCBTExam(created);
   };
@@ -637,7 +673,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCbtExams((prev) =>
       prev.map((e) => {
         if (e.id !== id) return e;
-        const next = { ...e, ...updated };
+        const next: CBTExam = {
+          ...e,
+          ...updated,
+          teacherId:
+            'teacherId' in updated
+              ? resolveValidTeacherId(updated.teacherId)
+              : resolveValidTeacherId(e.teacherId),
+        };
         void supabaseSchoolService.upsertCBTExam(next);
         return next;
       })
@@ -698,7 +741,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const createAssignment = (asg: Omit<Assignment, 'id'>) => {
     const id = `asg-${Date.now()}`;
-    const created = { ...asg, id };
+    const created: Assignment = {
+      ...asg,
+      id,
+      teacherId: resolveValidTeacherId(asg.teacherId),
+    };
     setAssignments((prev) => [...prev, created]);
     void supabaseSchoolService.upsertAssignment(created);
   };
@@ -710,7 +757,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const createStudyNote = (note: Omit<StudyNote, 'id'>) => {
     const id = `note-${Date.now()}`;
-    const created = { ...note, id };
+    const created: StudyNote = {
+      ...note,
+      id,
+      classId: note.classId && note.classId !== 'all' ? note.classId : undefined,
+      teacherId: resolveValidTeacherId(note.teacherId),
+    };
     setStudyNotes((prev) => [...prev, created]);
     void supabaseSchoolService.upsertStudyNote(created);
   };
@@ -780,8 +832,61 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     void supabaseSchoolService.upsertAnnouncement(newAnn);
   };
 
+  const addFeeRecord = (fee: Omit<FeeRecord, 'id'>) => {
+    const id = `fee-${Date.now()}`;
+    const created: FeeRecord = { ...fee, id };
+    setFeeRecords((prev) => [...prev, created]);
+    void supabaseSchoolService.upsertFeeRecord(created);
+  };
+
+  const updateFeeRecord = (id: string, updated: Partial<FeeRecord>) => {
+    setFeeRecords((prev) =>
+      prev.map((f) => {
+        if (f.id !== id) return f;
+        const next = { ...f, ...updated };
+        void supabaseSchoolService.upsertFeeRecord(next);
+        return next;
+      })
+    );
+  };
+
+  const deleteFeeRecord = (id: string) => {
+    setFeeRecords((prev) => prev.filter((f) => f.id !== id));
+    void supabaseSchoolService.deleteFeeRecord(id);
+  };
+
+  // Restricted to authenticated administrators; clears ONLY local browser cache keys and NEVER deletes Supabase records
   const resetToDefaultData = () => {
-    localStorage.clear();
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      console.warn('[Security] Unauthorized resetToDefaultData attempt blocked.');
+      return;
+    }
+
+    const keysToRemove = [
+      'settings',
+      'students',
+      'teachers',
+      'parents',
+      'classes',
+      'subjects',
+      'scores',
+      'results',
+      'attendance',
+      'cbtExams',
+      'cbtAttempts',
+      'assignments',
+      'notes',
+      'news',
+      'gallery',
+      'apps',
+      'downloads',
+      'announcements',
+      'fees',
+    ];
+    keysToRemove.forEach((suffix) => {
+      localStorage.removeItem(`${LOCAL_STORAGE_KEY}_${suffix}`);
+    });
+
     setSystemSettings(initialSystemSettings);
     setStudents(sampleStudents);
     setTeachers(sampleTeachers);
@@ -800,6 +905,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setApplications(sampleApplications);
     setDownloads(sampleDownloads);
     setAnnouncements(sampleAnnouncements);
+    setFeeRecords(sampleFeeRecords);
   };
 
   return (
@@ -871,6 +977,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         submitOnlineApplication,
         updateApplicationStatus,
         sendAnnouncement,
+        addFeeRecord,
+        updateFeeRecord,
+        deleteFeeRecord,
         resetToDefaultData,
       }}
     >

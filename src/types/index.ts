@@ -102,7 +102,7 @@ export interface ScoreRecord {
   totalScore: number; // max 100
   grade: 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
   remarks: string;
-  teacherId: string;
+  teacherId?: string;
 }
 
 export interface PsychomotorRating {
@@ -169,7 +169,7 @@ export interface CBTExam {
   subjectName: string;
   classId: string;
   className: string;
-  teacherId: string;
+  teacherId?: string;
   term?: string;
   session?: string;
   durationMinutes: number;
@@ -206,7 +206,7 @@ export interface Assignment {
   subjectName: string;
   classId: string;
   className: string;
-  teacherId: string;
+  teacherId?: string;
   teacherName: string;
   dueDate: string;
   description: string;

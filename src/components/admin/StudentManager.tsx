@@ -71,23 +71,34 @@ export const StudentManager: React.FC = () => {
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const firstName = formData.firstName.trim();
+    const lastName = formData.lastName.trim();
+    const parentName = formData.parentName.trim();
+    const parentPhone = formData.parentPhone.trim();
+
+    if (!firstName || !lastName || !parentName || !parentPhone) {
+      setNotification('Please complete all required student and guardian fields.');
+      setTimeout(() => setNotification(null), 3500);
+      return;
+    }
+
     const selCls = classes.find((c) => c.id === formData.classId);
 
     const newStd: Omit<Student, 'id'> = {
-      firstName: formData.firstName,
-      lastName: formData.lastName,
-      admissionNo: formData.admissionNo || `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
+      firstName,
+      lastName,
+      admissionNo: formData.admissionNo.trim() || `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
       classId: formData.classId,
       className: selCls?.name || formData.className,
       gender: formData.gender,
       dob: formData.dob,
-      parentName: formData.parentName,
-      parentPhone: formData.parentPhone,
-      password: formData.password,
-      resultPasscode: formData.resultPasscode || createAlphanumericCode(),
-      address: formData.address,
+      parentName,
+      parentPhone,
+      password: formData.password.trim() || 'student123',
+      resultPasscode: formData.resultPasscode.trim() || createAlphanumericCode(),
+      address: formData.address.trim() || 'Abuja, Nigeria',
       status: 'Active',
-      avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 1000)}?auto=format&fit=crop&w=300&q=80`,
+      avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=300&q=80',
     };
 
     addStudent(newStd);
@@ -117,7 +128,13 @@ export const StudentManager: React.FC = () => {
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingStudent) return;
-    updateStudent(editingStudent.id, editFormData);
+    updateStudent(editingStudent.id, {
+      ...editFormData,
+      firstName: editFormData.firstName?.trim() || editingStudent.firstName,
+      lastName: editFormData.lastName?.trim() || editingStudent.lastName,
+      parentName: editFormData.parentName?.trim() || editingStudent.parentName,
+      parentPhone: editFormData.parentPhone?.trim() || editingStudent.parentPhone,
+    });
     setEditingStudent(null);
   };
 

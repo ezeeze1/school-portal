@@ -1,10 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles, Key, Eye, EyeOff, UserCheck, AlertCircle, Plus, Trash2, Calendar, ArrowRight } from 'lucide-react';
+import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldCheck, Heart, User, Image as ImageIcon, Sparkles, Key, Eye, EyeOff, UserCheck, AlertCircle, Plus, Trash2, Calendar, ArrowRight, RotateCcw } from 'lucide-react';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AcademicSessionManager: React.FC = () => {
-  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials, academicSessions, addAcademicSession, deleteAcademicSession } = useSchool();
+  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials, academicSessions, addAcademicSession, deleteAcademicSession, resetToDefaultData, activeRole, currentUser } = useSchool();
+  const [showResetCacheModal, setShowResetCacheModal] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<'academic' | 'security' | 'general'>('academic');
   const [generalSection, setGeneralSection] = useState<'identity' | 'hero' | 'stats' | 'about'>('identity');
 
@@ -635,7 +636,7 @@ export const AcademicSessionManager: React.FC = () => {
 
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="text-[11px] text-slate-500 flex items-center gap-1">
-              <Lock className="w-3.5 h-3.5 text-amber-500" /> Changes apply immediately and are stored securely in browser storage.
+              <Lock className="w-3.5 h-3.5 text-amber-500" /> Changes apply immediately and are stored in browser storage until Supabase Auth migration.
             </div>
 
             <button
@@ -645,6 +646,27 @@ export const AcademicSessionManager: React.FC = () => {
               <Key className="w-4 h-4" /> Save Admin Credentials
             </button>
           </div>
+
+          {activeRole === 'admin' && currentUser?.role === 'admin' && (
+            <div className="mt-6 p-5 rounded-2xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <p className="font-bold text-xs text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                  <RotateCcw className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                  Administrator Local Cache Reset
+                </p>
+                <p className="text-[11px] text-rose-700/90 dark:text-rose-300/80">
+                  Restores only this browser's localStorage cache to default records. Does not modify or delete any Supabase database records.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowResetCacheModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 shadow-sm"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reset Local Cache
+              </button>
+            </div>
+          )}
         </form>
       ) : (
         <form onSubmit={handleSaveGeneral} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-8 space-y-8 shadow-xl">
@@ -1076,6 +1098,21 @@ export const AcademicSessionManager: React.FC = () => {
         title="Confirm Academic Session Removal"
         message="Are you sure you want to delete this academic session from the system directory? Archived scores will remain unaffected, but this session will no longer appear in selectors."
         itemName={sessionToDelete ? `${sessionToDelete} Academic Session` : undefined}
+      />
+
+      {/* Confirmation Modal for Admin-Only Local Cache Reset */}
+      <ConfirmDeleteModal
+        isOpen={showResetCacheModal}
+        onClose={() => setShowResetCacheModal(false)}
+        onConfirm={() => {
+          resetToDefaultData();
+          setShowResetCacheModal(false);
+          setSecSuccess('Local browser cache restored to default records. Supabase tables were not altered.');
+          setTimeout(() => setSecSuccess(null), 5000);
+        }}
+        title="Reset Local Browser Cache?"
+        message="This will clear only your browser's localStorage cache and restore default sample records locally. Your Supabase database records will NOT be modified or deleted."
+        itemName="Local Browser Portal Cache"
       />
     </div>
   );

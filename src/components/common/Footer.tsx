@@ -1,9 +1,9 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Mail, Phone, MapPin, GraduationCap, ShieldCheck, Heart, RotateCcw } from 'lucide-react';
+import { Mail, Phone, MapPin, ShieldCheck } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { setCurrentView, resetToDefaultData, systemSettings } = useSchool();
+  const { setCurrentView, systemSettings } = useSchool();
 
   return (
     <footer className="bg-slate-950 text-slate-400 pt-16 pb-8 border-t border-slate-800">
@@ -115,19 +115,6 @@ export const Footer: React.FC = () => {
           <p>© {new Date().getFullYear()} {systemSettings.schoolName || 'DIVINE ACADEMY SECONDARY SCHOOL'}. All rights reserved.</p>
           
           <div className="flex items-center gap-4">
-            <button
-              onClick={() => {
-                if (window.confirm('Reset all portal records to default sample database?')) {
-                  resetToDefaultData();
-                  alert('System database reset to sample defaults.');
-                }
-              }}
-              className="inline-flex items-center gap-1.5 text-slate-400 hover:text-amber-400 font-semibold transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset Demo Database
-            </button>
-            <span>•</span>
             <span className="text-slate-500">Powered by Academy360 Engine</span>
           </div>
         </div>

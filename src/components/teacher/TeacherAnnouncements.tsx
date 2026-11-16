@@ -4,23 +4,34 @@ import { Announcement } from '../../types';
 import { Send, Bell, CheckCircle2 } from 'lucide-react';
 
 export const TeacherAnnouncements: React.FC = () => {
-  const { announcements, addAnnouncement } = useSchool();
+  const { announcements, sendAnnouncement, currentUser } = useSchool();
   const [title, setTitle] = useState('');
   const [targetAudience, setTargetAudience] = useState<'All' | 'Students' | 'Parents' | 'Teachers'>('Students');
   const [message, setMessage] = useState('');
+  const [sentSuccess, setSentSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const newAnn: Omit<Announcement, 'id'> = {
-      title,
-      sender: 'Dr. (Mrs.) Victoria Adebayo (Form Teacher)',
-      date: new Date().toISOString().split('T')[0],
+    const trimmedTitle = title.trim();
+    const trimmedMessage = message.trim();
+    if (!trimmedTitle || !trimmedMessage) {
+      setErrorMsg('Please enter both an announcement title and message.');
+      return;
+    }
+
+    setErrorMsg('');
+    const newAnn: Omit<Announcement, 'id' | 'date'> = {
+      title: trimmedTitle,
+      sender: currentUser?.name || 'Form Teacher',
       targetAudience,
-      message,
+      message: trimmedMessage,
     };
-    addAnnouncement(newAnn);
+    sendAnnouncement(newAnn);
     setTitle('');
     setMessage('');
+    setSentSuccess(true);
+    setTimeout(() => setSentSuccess(false), 3000);
   };
 
   return (
@@ -31,6 +42,19 @@ export const TeacherAnnouncements: React.FC = () => {
         <h2 className="font-serif font-bold text-2xl text-slate-900 dark:text-white flex items-center gap-2">
           <Bell className="w-6 h-6 text-amber-500" /> Send Broadcast Announcement
         </h2>
+
+        {errorMsg && (
+          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs font-bold text-red-700 dark:text-red-300">
+            {errorMsg}
+          </div>
+        )}
+
+        {sentSuccess && (
+          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4" />
+            Broadcast announcement sent!
+          </div>
+        )}
 
         <div className="space-y-4 text-xs">
           <div>

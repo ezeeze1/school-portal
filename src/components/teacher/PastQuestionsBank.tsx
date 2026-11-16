@@ -24,7 +24,15 @@ import {
 } from 'lucide-react';
 
 export const PastQuestionsBank: React.FC = () => {
-  const { cbtExams, classes, subjects, createCBTExam, updateCBTExam, deleteCBTExam, academicSessions } = useSchool();
+  const { cbtExams, classes, subjects, teachers, currentUser, createCBTExam, updateCBTExam, deleteCBTExam, academicSessions } = useSchool();
+  const matchedTeacher =
+    currentUser?.role === 'teacher'
+      ? teachers.find(
+          (t) =>
+            t.id === currentUser.id ||
+            (currentUser.referenceId && t.staffId === currentUser.referenceId)
+        )
+      : undefined;
 
   // Filters State
   const [selectedClass, setSelectedClass] = useState<string>('all');
@@ -169,7 +177,7 @@ export const PastQuestionsBank: React.FC = () => {
       subjectName: selectedSubj?.name || 'General',
       classId: formClassId,
       className: selectedCls?.name || 'SS 2',
-      teacherId: 'tch-102',
+      teacherId: matchedTeacher?.id,
       term: formTerm,
       session: formSession,
       durationMinutes: Number(formDurationMinutes),
@@ -221,7 +229,7 @@ export const PastQuestionsBank: React.FC = () => {
       subjectName: exam.subjectName,
       classId: exam.classId,
       className: exam.className,
-      teacherId: 'tch-102',
+      teacherId: matchedTeacher?.id,
       term: '3rd Term',
       session: '2025/2026',
       durationMinutes: exam.durationMinutes,

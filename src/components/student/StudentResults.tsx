@@ -5,9 +5,16 @@ import { Award, Printer, Lock, Unlock, Key, ShieldCheck, AlertCircle, Sparkles, 
 import { ReportCardModal } from '../reports/ReportCardModal';
 
 export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
-  const { results, systemSettings } = useSchool();
-  const [selectedTerm, setSelectedTerm] = useState<'1st Term' | '2nd Term' | '3rd Term'>('2nd Term');
-  const [selectedSession, setSelectedSession] = useState<string>('2025/2026');
+  const { results, systemSettings, academicSessions } = useSchool();
+  const availableSessions = academicSessions && academicSessions.length > 0
+    ? academicSessions
+    : [systemSettings.currentSession];
+  const [selectedTerm, setSelectedTerm] = useState<'1st Term' | '2nd Term' | '3rd Term'>(
+    systemSettings.currentTerm || '2nd Term'
+  );
+  const [selectedSession, setSelectedSession] = useState<string>(
+    systemSettings.currentSession || availableSessions[0]
+  );
   const [activeReportModal, setActiveReportModal] = useState<any | null>(null);
 
   // Passcode verification state per session/term
@@ -84,8 +91,9 @@ export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
             }}
             className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
           >
-            <option value="2025/2026">2025/2026 Session</option>
-            <option value="2024/2025">2024/2025 Session</option>
+            {availableSessions.map((sess) => (
+              <option key={sess} value={sess}>{sess} Session</option>
+            ))}
           </select>
 
           <select

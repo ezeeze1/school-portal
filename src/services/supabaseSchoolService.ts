@@ -44,6 +44,15 @@ export interface SupabasePortalSnapshot {
 }
 
 // Generic safe row mapper helpers
+const sanitizeTeacherId = (teacherId?: string | null): string | null => {
+  if (!teacherId) return null;
+  const trimmed = teacherId.trim();
+  if (!trimmed || trimmed === 'usr-admin' || trimmed.startsWith('u-admin')) {
+    return null;
+  }
+  return trimmed;
+};
+
 const toSystemSettingsRow = (s: SystemSessionTerm) => ({
   id: 'default',
   current_session: s.currentSession,
@@ -273,7 +282,7 @@ const toScoreRow = (s: ScoreRecord) => ({
   total_score: s.totalScore,
   grade: s.grade,
   remarks: s.remarks,
-  teacher_id: s.teacherId,
+  teacher_id: sanitizeTeacherId(s.teacherId),
 });
 
 const fromScoreRow = (r: Record<string, any>): ScoreRecord => ({
@@ -290,7 +299,7 @@ const fromScoreRow = (r: Record<string, any>): ScoreRecord => ({
   totalScore: Number(r.total_score),
   grade: r.grade,
   remarks: r.remarks,
-  teacherId: r.teacher_id,
+  teacherId: r.teacher_id ?? undefined,
 });
 
 const toResultRow = (res: TerminalResult) => ({
@@ -366,7 +375,7 @@ const toCBTExamRow = (e: CBTExam) => ({
   subject_name: e.subjectName,
   class_id: e.classId,
   class_name: e.className,
-  teacher_id: e.teacherId,
+  teacher_id: sanitizeTeacherId(e.teacherId),
   term: e.term ?? null,
   session: e.session ?? null,
   duration_minutes: e.durationMinutes,
@@ -388,7 +397,7 @@ const fromCBTExamRow = (r: Record<string, any>): CBTExam => ({
   subjectName: r.subject_name,
   classId: r.class_id,
   className: r.class_name,
-  teacherId: r.teacher_id,
+  teacherId: r.teacher_id ?? undefined,
   term: r.term ?? undefined,
   session: r.session ?? undefined,
   durationMinutes: Number(r.duration_minutes),
@@ -440,7 +449,7 @@ const toAssignmentRow = (a: Assignment) => ({
   subject_name: a.subjectName,
   class_id: a.classId,
   class_name: a.className,
-  teacher_id: a.teacherId,
+  teacher_id: sanitizeTeacherId(a.teacherId),
   teacher_name: a.teacherName,
   due_date: a.dueDate,
   description: a.description,
@@ -460,7 +469,7 @@ const fromAssignmentRow = (r: Record<string, any>): Assignment => ({
   subjectName: r.subject_name,
   classId: r.class_id,
   className: r.class_name,
-  teacherId: r.teacher_id,
+  teacherId: r.teacher_id ?? undefined,
   teacherName: r.teacher_name,
   dueDate: r.due_date,
   description: r.description,
@@ -478,9 +487,9 @@ const toStudyNoteRow = (n: StudyNote) => ({
   title: n.title,
   subject_id: n.subjectId ?? null,
   subject_name: n.subjectName,
-  class_id: n.classId ?? null,
+  class_id: n.classId && n.classId !== 'all' ? n.classId : null,
   class_name: n.className,
-  teacher_id: n.teacherId ?? null,
+  teacher_id: sanitizeTeacherId(n.teacherId),
   teacher_name: n.teacherName ?? null,
   upload_date: n.uploadDate,
   file_size: n.fileSize,
@@ -494,7 +503,7 @@ const fromStudyNoteRow = (r: Record<string, any>): StudyNote => ({
   title: r.title,
   subjectId: r.subject_id ?? undefined,
   subjectName: r.subject_name,
-  classId: r.class_id ?? undefined,
+  classId: r.class_id ?? 'all',
   className: r.class_name,
   teacherId: r.teacher_id ?? undefined,
   teacherName: r.teacher_name ?? undefined,
@@ -621,6 +630,23 @@ const fromAnnouncementRow = (r: Record<string, any>): AnnouncementNotification =
   targetRole: r.target_role ?? undefined,
   priority: r.priority ?? undefined,
   date: r.date,
+});
+
+const toFeeRecordRow = (f: FeeRecord) => ({
+  id: f.id,
+  student_id: f.studentId,
+  student_name: f.studentName,
+  term: f.term,
+  session: f.session,
+  tuition: f.tuition,
+  development_fee: f.developmentFee,
+  ict_fee: f.ictFee,
+  uniform_fee: f.uniformFee,
+  total: f.total,
+  amount_paid: f.amountPaid,
+  balance: f.balance,
+  status: f.status,
+  receipt_no: f.receiptNo,
 });
 
 const fromFeeRecordRow = (r: Record<string, any>): FeeRecord => ({
@@ -863,4 +889,12 @@ export const supabaseSchoolService = {
 
   upsertAnnouncement: (ann: AnnouncementNotification) =>
     safeUpsert('announcements', toAnnouncementRow(ann)),
+
+  upsertFeeRecord: (fee: FeeRecord) =>
+    safeUpsert('fee_records', toFeeRecordRow(fee)),
+
+  upsertFeeRecords: (fees: FeeRecord[]) =>
+    fees.length > 0 ? safeUpsert('fee_records', fees.map(toFeeRecordRow)) : Promise.resolve(),
+
+  deleteFeeRecord: (id: string) => safeDeleteById('fee_records', id),
 };

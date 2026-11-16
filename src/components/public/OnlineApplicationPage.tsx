@@ -25,9 +25,38 @@ export const OnlineApplicationPage: React.FC = () => {
     previousSchool: '',
   });
 
+  const [formError, setFormError] = useState<string | null>(null);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const appNum = submitOnlineApplication(formData);
+    setFormError(null);
+
+    const cleaned = {
+      ...formData,
+      applicantFirstName: formData.applicantFirstName.trim(),
+      applicantLastName: formData.applicantLastName.trim(),
+      guardianName: formData.guardianName.trim(),
+      guardianEmail: formData.guardianEmail.trim(),
+      guardianPhone: formData.guardianPhone.trim(),
+      previousSchool: formData.previousSchool.trim(),
+    };
+
+    if (!cleaned.applicantFirstName || !cleaned.applicantLastName || !cleaned.guardianName) {
+      setFormError('Please provide the candidate full name and guardian name.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned.guardianEmail)) {
+      setFormError('Please enter a valid guardian email address.');
+      return;
+    }
+
+    if (cleaned.guardianPhone.replace(/\D/g, '').length < 7) {
+      setFormError('Please enter a valid guardian phone number (at least 7 digits).');
+      return;
+    }
+
+    const appNum = submitOnlineApplication(cleaned);
     setGeneratedAppNum(appNum);
     setStep(3);
   };
@@ -150,6 +179,12 @@ export const OnlineApplicationPage: React.FC = () => {
               </span>
             </div>
 
+            {formError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900 rounded-xl text-xs font-medium text-red-700 dark:text-red-300">
+                {formError}
+              </div>
+            )}
+
             {step === 1 && (
               <div className="space-y-4 animate-fade-in">
                 <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500">
@@ -165,7 +200,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="text"
                       required
                       value={formData.applicantFirstName}
-                      onChange={(e) => setFormData({ ...formData, applicantFirstName: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, applicantFirstName: e.target.value });
+                      }}
                       placeholder="e.g. Chukwuma"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -179,7 +217,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="text"
                       required
                       value={formData.applicantLastName}
-                      onChange={(e) => setFormData({ ...formData, applicantLastName: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, applicantLastName: e.target.value });
+                      }}
                       placeholder="e.g. Eze"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -234,7 +275,14 @@ export const OnlineApplicationPage: React.FC = () => {
                 <div className="pt-4 flex justify-end">
                   <button
                     type="button"
-                    onClick={() => setStep(2)}
+                    onClick={() => {
+                      if (!formData.applicantFirstName.trim() || !formData.applicantLastName.trim()) {
+                        setFormError('Please enter the candidate first name and surname before continuing.');
+                        return;
+                      }
+                      setFormError(null);
+                      setStep(2);
+                    }}
                     className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-6 py-2.5 rounded-xl text-xs"
                   >
                     Next Step: Guardian Info →
@@ -258,7 +306,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="text"
                       required
                       value={formData.guardianName}
-                      onChange={(e) => setFormData({ ...formData, guardianName: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, guardianName: e.target.value });
+                      }}
                       placeholder="e.g. Chief Nnamdi Eze"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -272,7 +323,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="email"
                       required
                       value={formData.guardianEmail}
-                      onChange={(e) => setFormData({ ...formData, guardianEmail: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, guardianEmail: e.target.value });
+                      }}
                       placeholder="nnamdi.eze@gmail.com"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -288,7 +342,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="tel"
                       required
                       value={formData.guardianPhone}
-                      onChange={(e) => setFormData({ ...formData, guardianPhone: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, guardianPhone: e.target.value });
+                      }}
                       placeholder="+234 803 123 4567"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -302,7 +359,10 @@ export const OnlineApplicationPage: React.FC = () => {
                       type="text"
                       required
                       value={formData.previousSchool}
-                      onChange={(e) => setFormData({ ...formData, previousSchool: e.target.value })}
+                      onChange={(e) => {
+                        setFormError(null);
+                        setFormData({ ...formData, previousSchool: e.target.value });
+                      }}
                       placeholder="e.g. Corona Primary School, Gbagada"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs focus:ring-2 focus:ring-amber-500 outline-none"
                     />
@@ -312,7 +372,10 @@ export const OnlineApplicationPage: React.FC = () => {
                 <div className="pt-4 flex justify-between">
                   <button
                     type="button"
-                    onClick={() => setStep(1)}
+                    onClick={() => {
+                      setFormError(null);
+                      setStep(1);
+                    }}
                     className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-6 py-2.5 rounded-xl text-xs"
                   >
                     ← Back

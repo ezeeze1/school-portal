@@ -3,7 +3,6 @@ import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
 import { WhatsAppButton } from './components/common/WhatsAppButton';
-import { LoginModal } from './components/auth/LoginModal';
 
 // Public Pages
 import { HomePage } from './components/public/HomePage';
@@ -22,7 +21,7 @@ import { ParentPortalLayout } from './components/parent/ParentPortalLayout';
 import { AdminPortalLayout } from './components/admin/AdminPortalLayout';
 
 const MainApp: React.FC = () => {
-  const { currentView, activeRole, showLoginModal, setShowLoginModal } = useSchool();
+  const { currentView, activeRole } = useSchool();
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
@@ -60,9 +59,6 @@ const MainApp: React.FC = () => {
 
       {/* Floating WhatsApp Action Button for Public Site */}
       {!activeRole && <WhatsAppButton />}
-
-      {/* Authentication Login Modal */}
-      {showLoginModal && <LoginModal onClose={() => setShowLoginModal(false)} />}
 
     </div>
   );

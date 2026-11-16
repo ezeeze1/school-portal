@@ -4,7 +4,7 @@ import { AttendanceRecord, Student } from '../../types';
 import { Save, CheckCircle2, Calendar, Users } from 'lucide-react';
 
 export const AttendanceRecorder: React.FC = () => {
-  const { students, classes, attendance, saveBatchAttendance } = useSchool();
+  const { students, classes, recordAttendance } = useSchool();
   const [selectedClassId, setSelectedClassId] = useState<string>('c-ss2');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -13,7 +13,7 @@ export const AttendanceRecorder: React.FC = () => {
 
   // Attendance state per student ID
   const [statusMap, setStatusMap] = useState<Record<string, 'Present' | 'Absent' | 'Late' | 'Excused'>>({});
-  const [remarksMap, setRemarksMap] = useState<Record<string, string>>({});
+  const [remarksMap] = useState<Record<string, string>>({});
 
   const handleStatusChange = (studentId: string, status: 'Present' | 'Absent' | 'Late' | 'Excused') => {
     setStatusMap((prev) => ({ ...prev, [studentId]: status }));
@@ -28,6 +28,8 @@ export const AttendanceRecorder: React.FC = () => {
   };
 
   const handleSaveAttendance = () => {
+    if (classStudents.length === 0) return;
+
     const records: Omit<AttendanceRecord, 'id'>[] = classStudents.map((std) => ({
       studentId: std.id,
       studentName: `${std.firstName} ${std.lastName}`,
@@ -37,7 +39,7 @@ export const AttendanceRecorder: React.FC = () => {
       remark: remarksMap[std.id] || '',
     }));
 
-    saveBatchAttendance(records);
+    recordAttendance(records);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };

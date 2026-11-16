@@ -1,51 +1,89 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Student } from '../../types';
-import { Users, Award, Calendar, Bell, Printer, Heart, ArrowRight, Lock, Unlock, Key, ShieldCheck, AlertCircle, Copy, Check } from 'lucide-react';
+import { Award, Bell, Printer, Lock, Key, ShieldCheck, AlertCircle, Users } from 'lucide-react';
 import { ReportCardModal } from '../reports/ReportCardModal';
 
 export const ParentPortalLayout: React.FC = () => {
   const { currentUser, students, parents, results, attendance, announcements } = useSchool();
   const [activeReportModal, setActiveReportModal] = useState<any | null>(null);
 
-  // Find logged-in parent
-  const currentParent =
-    parents.find(
-      (p) =>
-        p.id === currentUser?.id ||
-        p.parentId?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
-        p.email.toLowerCase() === currentUser?.email?.toLowerCase()
-    ) ||
-    parents.find(
-      (p) => p.fullName.toLowerCase() === currentUser?.name?.toLowerCase()
-    ) ||
-    parents[0];
+  // Strictly match the currently authenticated parent without falling back to another parent
+  const currentParent = currentUser
+    ? parents.find(
+        (p) =>
+          p.id === currentUser.id ||
+          (currentUser.referenceId &&
+            p.parentId?.toLowerCase() === currentUser.referenceId.toLowerCase()) ||
+          (currentUser.email && p.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (currentUser.name && p.fullName.toLowerCase() === currentUser.name.toLowerCase())
+      )
+    : undefined;
 
   const parentDisplayName = currentParent
-    ? (currentParent.title ? `${currentParent.title} ${currentParent.fullName}` : currentParent.fullName)
-    : (currentUser?.name || 'Chief Olabisi Adeleke');
+    ? currentParent.title
+      ? `${currentParent.title} ${currentParent.fullName}`
+      : currentParent.fullName
+    : currentUser?.name || 'Parent / Guardian';
 
-  // Wards / Children belonging to this parent
-  const parentWards = students.filter(
-    (s) => s.parentEmail?.toLowerCase() === currentParent?.email?.toLowerCase() || currentParent?.studentIds?.includes(s.id)
-  );
-  const availableStudents = parentWards.length > 0 ? parentWards : students;
+  // Wards / Children strictly linked to this parent only (NEVER fall back to all school students)
+  const parentEmailToMatch = (currentParent?.email || currentUser?.email || '').toLowerCase();
+  const availableStudents = currentUser
+    ? students.filter(
+        (s) =>
+          (parentEmailToMatch && s.parentEmail?.toLowerCase() === parentEmailToMatch) ||
+          Boolean(currentParent?.studentIds?.includes(s.id))
+      )
+    : [];
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
-    availableStudents[0]?.id || 'std-004'
+    availableStudents[0]?.id || ''
   );
+
+  useEffect(() => {
+    if (availableStudents.length === 0) {
+      if (selectedStudentId !== '') setSelectedStudentId('');
+    } else if (!availableStudents.some((s) => s.id === selectedStudentId)) {
+      setSelectedStudentId(availableStudents[0].id);
+    }
+  }, [availableStudents, selectedStudentId]);
 
   // Passcode protection state for parent portal (same passcode as student)
   const [unlockedStudents, setUnlockedStudents] = useState<Record<string, boolean>>({});
   const [passcodeInput, setPasscodeInput] = useState('');
   const [passcodeError, setPasscodeError] = useState(false);
-  const [copied, setCopied] = useState(false);
 
-  // Selected child object
-  const selectedStudent = students.find((s) => s.id === selectedStudentId) || availableStudents[0] || students[0];
+  // Selected child object (strictly within availableStudents)
+  const selectedStudent = availableStudents.find((s) => s.id === selectedStudentId) || availableStudents[0];
 
-  // Associated parent profile
-  const parentProfile = parents.find((p) => p.email === selectedStudent.parentEmail) || parents[0];
+  if (!selectedStudent) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-6">
+        <div className="bg-slate-900 text-white rounded-3xl p-8 border border-slate-800 space-y-2 shadow-2xl">
+          <span className="text-amber-400 font-bold text-xs uppercase tracking-wider">
+            Parent & Guardian Portal
+          </span>
+          <h1 className="font-serif font-bold text-2xl sm:text-3xl">
+            Welcome, {parentDisplayName}
+          </h1>
+          <p className="text-xs text-slate-400">
+            Monitor your linked ward's academic growth, attendance logs, and report cards.
+          </p>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-10 text-center space-y-4 shadow-md">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 flex items-center justify-center mx-auto">
+            <Users className="w-8 h-8" />
+          </div>
+          <h2 className="font-serif font-bold text-xl text-slate-900 dark:text-white">
+            No Linked Student Wards Found
+          </h2>
+          <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+            For student privacy and data protection, only wards explicitly linked to your guardian email or parent ID are visible here. Please contact the school administration office to link your child's Admission Number to your account.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Child's results
   const childResults = results.filter((r) => r.studentId === selectedStudent.id);
@@ -68,17 +106,6 @@ export const ParentPortalLayout: React.FC = () => {
 
   const handleLockResult = () => {
     setUnlockedStudents((prev) => ({ ...prev, [selectedStudent.id]: false }));
-  };
-
-  const handleUseDemoCode = () => {
-    setPasscodeInput(officialPasscode);
-    setPasscodeError(false);
-  };
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(officialPasscode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   // Child's attendance

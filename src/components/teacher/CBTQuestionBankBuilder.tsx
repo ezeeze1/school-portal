@@ -140,7 +140,15 @@ const CBTQuestionSpellingHelper: React.FC<SpellingHelperProps> = ({ text, onCorr
 };
 
 export const CBTQuestionBankBuilder: React.FC = () => {
-  const { cbtExams, cbtAttempts, createCBTExam, updateCBTExam, deleteCBTExam, deleteMultipleCBTExams, deleteCBTAttempt, classes, subjects } = useSchool();
+  const { cbtExams, cbtAttempts, createCBTExam, updateCBTExam, deleteCBTExam, deleteMultipleCBTExams, deleteCBTAttempt, classes, subjects, teachers, currentUser } = useSchool();
+  const matchedTeacher =
+    currentUser?.role === 'teacher'
+      ? teachers.find(
+          (t) =>
+            t.id === currentUser.id ||
+            (currentUser.referenceId && t.staffId === currentUser.referenceId)
+        )
+      : undefined;
   const [activeTab, setActiveTab] = useState<'list' | 'create' | 'import'>('list');
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
 
@@ -308,7 +316,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       subjectName: selectedSubj?.name || 'General',
       classId,
       className: selectedCls?.name || 'SS 2',
-      teacherId: 'tch-102',
+      teacherId: matchedTeacher?.id,
       durationMinutes: Number(durationMinutes),
       totalQuestions: questions.length,
       totalMarks: questions.reduce((acc, q) => acc + q.marks, 0),
