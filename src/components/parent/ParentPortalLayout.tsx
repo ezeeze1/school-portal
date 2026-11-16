@@ -4,7 +4,7 @@ import { Award, Bell, Printer, Lock, Key, ShieldCheck, AlertCircle, Users } from
 import { ReportCardModal } from '../reports/ReportCardModal';
 
 export const ParentPortalLayout: React.FC = () => {
-  const { currentUser, students, parents, results, attendance, announcements } = useSchool();
+  const { currentUser, students, parents, results, attendance, announcements, verifyResultPasscode } = useSchool();
   const [activeReportModal, setActiveReportModal] = useState<any | null>(null);
 
   // Strictly match the currently authenticated parent without falling back to another parent
@@ -51,6 +51,7 @@ export const ParentPortalLayout: React.FC = () => {
   const [unlockedStudents, setUnlockedStudents] = useState<Record<string, boolean>>({});
   const [passcodeInput, setPasscodeInput] = useState('');
   const [passcodeError, setPasscodeError] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Selected child object (strictly within availableStudents)
   const selectedStudent = availableStudents.find((s) => s.id === selectedStudentId) || availableStudents[0];
@@ -89,18 +90,27 @@ export const ParentPortalLayout: React.FC = () => {
   const childResults = results.filter((r) => r.studentId === selectedStudent.id);
   const latestResult = childResults[0];
 
-  // Passcode validation logic (same passcode assigned to student)
-  const officialPasscode = (selectedStudent.resultPasscode || 'RES-8K9M2P').trim().toUpperCase();
+  // Passcode validation logic via server-side verification
   const isUnlocked = unlockedStudents[selectedStudent.id] || false;
 
-  const handleVerifyPasscode = (e: React.FormEvent) => {
+  const handleVerifyPasscode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passcodeInput.trim().toUpperCase() === officialPasscode) {
-      setUnlockedStudents((prev) => ({ ...prev, [selectedStudent.id]: true }));
-      setPasscodeError(false);
-      setPasscodeInput('');
-    } else {
+    if (!passcodeInput.trim() || isVerifying) return;
+    setIsVerifying(true);
+    setPasscodeError(false);
+    try {
+      const verified = await verifyResultPasscode(selectedStudent.id, passcodeInput);
+      if (verified) {
+        setUnlockedStudents((prev) => ({ ...prev, [selectedStudent.id]: true }));
+        setPasscodeError(false);
+        setPasscodeInput('');
+      } else {
+        setPasscodeError(true);
+      }
+    } catch {
       setPasscodeError(true);
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -240,9 +250,9 @@ export const ParentPortalLayout: React.FC = () => {
                         setPasscodeInput(e.target.value.toUpperCase());
                         setPasscodeError(false);
                       }}
-                      placeholder="e.g. RES-8K9M2P"
+                      placeholder="Enter official passcode"
                       className="w-full text-center tracking-widest font-mono text-base font-bold px-4 py-2.5 bg-white dark:bg-slate-800 border-2 border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white outline-none focus:border-amber-500 uppercase placeholder:text-slate-400 placeholder:tracking-normal placeholder:font-sans placeholder:text-xs"
-                      maxLength={12}
+                      maxLength={16}
                     />
 
                     {passcodeError && (
@@ -255,10 +265,11 @@ export const ParentPortalLayout: React.FC = () => {
 
                   <button
                     type="submit"
-                    className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 px-5 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-md"
+                    disabled={isVerifying || !passcodeInput.trim()}
+                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold py-2.5 px-5 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-md"
                   >
                     <ShieldCheck className="w-4 h-4" />
-                    Unlock Ward's Result
+                    {isVerifying ? 'Verifying Passcode...' : "Unlock Ward's Result"}
                   </button>
                 </form>
 

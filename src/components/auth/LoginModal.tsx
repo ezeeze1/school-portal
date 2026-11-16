@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { UserRole } from '../../types';
-import { X, ArrowRight, ChevronDown, AlertCircle } from 'lucide-react';
+import { isSupabaseConfigured } from '../../lib/supabase';
+import {
+  X,
+  ArrowRight,
+  ChevronDown,
+  AlertCircle,
+  CheckCircle2,
+  KeyRound,
+  Mail,
+  Loader2,
+  ShieldCheck,
+} from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -9,47 +20,19 @@ interface LoginModalProps {
   defaultRole?: UserRole;
 }
 
-export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, defaultRole = 'student' }) => {
-  const { switchRole, students, teachers, parents, adminCredentials } = useSchool();
+export const LoginModal: React.FC<LoginModalProps> = ({
+  isOpen,
+  onClose,
+  defaultRole = 'student',
+}) => {
+  const { signInWithPassword, sendPasswordResetEmail } = useSchool();
   const [selectedRole, setSelectedRole] = useState<UserRole>(defaultRole);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-
-  const detectRoleFromEmail = (emailStr: string): UserRole => {
-    const cleanEmail = emailStr.toLowerCase().trim();
-    if (
-      cleanEmail === adminCredentials.username.toLowerCase() ||
-      cleanEmail === adminCredentials.email.toLowerCase() ||
-      cleanEmail === 'ezekielsamson1@gmail.com' ||
-      cleanEmail === 'admin'
-    ) {
-      return 'admin';
-    }
-    if (cleanEmail.includes('parent') || cleanEmail.includes('guardian') || cleanEmail === 'parent.adeleke@gmail.com') {
-      return 'parent';
-    }
-    if (cleanEmail === 'david.adams@divineacademy.edu' || cleanEmail.includes('teacher') || cleanEmail.includes('staff') || cleanEmail.includes('faculty')) {
-      return 'teacher';
-    }
-    if (cleanEmail === 'david.adeleke@student.divineacademy.edu' || cleanEmail.includes('student')) {
-      return 'student';
-    }
-    if (cleanEmail.includes('@student.')) {
-      return 'student';
-    }
-    if (cleanEmail.includes('@divineacademy.edu')) {
-      return 'teacher';
-    }
-    return 'student'; // Fallback
-  };
-
-  const getCredentialsForRole = (role: UserRole) => {
-    if (role === 'admin') return { email: adminCredentials.username || adminCredentials.email, password: adminCredentials.password };
-    if (role === 'teacher') return { email: 'david.adams@divineacademy.edu', password: 'password123' };
-    if (role === 'parent') return { email: 'parent.adeleke@gmail.com', password: 'password123' };
-    return { email: 'david.adeleke@student.divineacademy.edu', password: 'password123' };
-  };
+  const [infoMsg, setInfoMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResetMode, setIsResetMode] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -57,308 +40,271 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, default
       setPassword('');
       setSelectedRole(defaultRole);
       setErrorMsg('');
+      setInfoMsg('');
+      setIsSubmitting(false);
+      setIsResetMode(false);
     }
   }, [isOpen, defaultRole]);
 
   if (!isOpen) return null;
 
-  const handleEmailChange = (val: string) => {
-    setEmail(val);
-    setErrorMsg('');
-    const role = detectRoleFromEmail(val);
-    setSelectedRole(role);
-  };
-
-  const handleRoleSelect = (role: UserRole) => {
-    setSelectedRole(role);
-    setErrorMsg('');
-  };
-
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setInfoMsg('');
 
-    const inputUser = email.trim().toLowerCase();
-    const cleanUser = inputUser.startsWith('@') ? inputUser.slice(1) : inputUser;
-    const inputPass = password.trim();
-
-    if (selectedRole === 'admin') {
-      const isValidAdminUser =
-        inputUser === adminCredentials.username.toLowerCase() ||
-        cleanUser === adminCredentials.username.toLowerCase() ||
-        inputUser === adminCredentials.email.toLowerCase() ||
-        inputUser === 'ezekielsamson1@gmail.com' ||
-        inputUser === 'admin';
-
-      const isValidAdminPass =
-        inputPass === adminCredentials.password ||
-        (inputUser === 'ezekielsamson1@gmail.com' && inputPass === 'sezuo2020');
-
-      if (isValidAdminUser && isValidAdminPass) {
-        switchRole('admin', {
-          id: 'usr-admin',
-          name: adminCredentials.name || 'System Administrator',
-          email: adminCredentials.email || 'ezekielsamson1@gmail.com',
-          role: 'admin',
-          avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200',
-          referenceId: 'ADM-001',
-        });
-        onClose();
-      } else {
-        setErrorMsg('Invalid Administrator username, email or password!');
-      }
-    } else if (selectedRole === 'teacher') {
-      const matchedTeacher = teachers.find(
-        (t) =>
-          t.email.toLowerCase() === inputUser ||
-          t.staffId.toLowerCase() === inputUser ||
-          t.staffId.toLowerCase() === cleanUser ||
-          `${t.firstName} ${t.lastName}`.toLowerCase().includes(inputUser)
+    if (!isSupabaseConfigured) {
+      setErrorMsg(
+        'Supabase authentication is not configured yet. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
       );
-      
-      const isValidDefault = (inputUser === 'david.adams@divineacademy.edu' || inputUser === 'david.adams' || cleanUser === 'david.adams') && (inputPass === 'password123' || inputPass === 'teacherpass123');
-      const isValidSaved = matchedTeacher && (matchedTeacher.password === inputPass || inputPass === 'password123' || inputPass === 'teacherpass123');
+      return;
+    }
 
-      if (isValidDefault || isValidSaved) {
-        const teacherObj = matchedTeacher || teachers[0];
-        switchRole('teacher', {
-          id: teacherObj.id,
-          name: `${teacherObj.firstName} ${teacherObj.lastName}`,
-          email: teacherObj.email,
-          role: 'teacher',
-          avatar: teacherObj.avatar,
-          referenceId: teacherObj.staffId,
-        });
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setErrorMsg('Please enter your valid school portal email address.');
+      return;
+    }
+
+    if (!password) {
+      setErrorMsg('Please enter your account password.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await signInWithPassword(cleanEmail, password);
+      if (result.ok) {
         onClose();
       } else {
-        setErrorMsg('Invalid Teacher Registration No (Staff ID), Email, or Password!');
+        setErrorMsg(result.error || 'Invalid email or password.');
       }
-    } else if (selectedRole === 'student') {
-      const matchedStudent = students.find((s) => {
-        const admissionNoMatch = s.admissionNo?.toLowerCase() === inputUser || s.admissionNo?.toLowerCase() === cleanUser;
-        const generatedEmail = `${s.firstName?.toLowerCase()}.${s.lastName?.toLowerCase()}@student.divineacademy.edu`;
-        const emailMatch = generatedEmail === inputUser || (s as any).email?.toLowerCase() === inputUser;
-        const nameMatch = `${s.firstName} ${s.lastName}`.toLowerCase().includes(inputUser);
-        return admissionNoMatch || emailMatch || nameMatch;
-      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
-      const isValidDefault = (inputUser === 'david.adeleke@student.divineacademy.edu' || inputUser === 'david.adeleke' || cleanUser === 'david.adeleke') && (inputPass === 'password123' || inputPass === 'student123');
-      const isValidSaved = matchedStudent && (matchedStudent.password === inputPass || inputPass === 'password123' || inputPass === 'student123');
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setInfoMsg('');
 
-      if (isValidDefault || isValidSaved) {
-        const studentObj = matchedStudent || students[0];
-        switchRole('student', {
-          id: studentObj.id,
-          name: `${studentObj.firstName} ${studentObj.lastName}`,
-          email: studentObj.parentEmail || `${studentObj.firstName.toLowerCase()}.${studentObj.lastName.toLowerCase()}@student.divineacademy.edu`,
-          role: 'student',
-          avatar: studentObj.avatar,
-          referenceId: studentObj.admissionNo,
-        });
-        onClose();
+    setIsSubmitting(true);
+    try {
+      const result = await sendPasswordResetEmail(email);
+      if (result.ok) {
+        setInfoMsg(
+          'Password reset instructions have been sent to your email address. Check your inbox and spam folder.'
+        );
       } else {
-        setErrorMsg('Invalid Student Registration No (Admission No), Email, or Password!');
+        setErrorMsg(result.error || 'Could not send password reset email.');
       }
-    } else if (selectedRole === 'parent') {
-      const matchedStudentWithParent = students.find((s) => {
-        const emailMatch = s.parentEmail?.toLowerCase() === inputUser;
-        const admissionMatch = s.admissionNo?.toLowerCase() === inputUser || s.admissionNo?.toLowerCase() === cleanUser;
-        return emailMatch || admissionMatch;
-      });
-
-      const matchedParentObj = parents?.find(
-        (p) => p.email.toLowerCase() === inputUser || p.parentId.toLowerCase() === inputUser || p.parentId.toLowerCase() === cleanUser
-      ) || parents?.find(
-        (p) => matchedStudentWithParent && p.email.toLowerCase() === matchedStudentWithParent.parentEmail?.toLowerCase()
-      );
-
-      const isValidDefault = inputUser === 'parent.adeleke@gmail.com' && inputPass === 'password123';
-      const isValidSaved = (matchedStudentWithParent || matchedParentObj) && (inputPass === 'password123' || inputPass === 'student123');
-
-      if (isValidDefault || isValidSaved) {
-        const parentObj = matchedParentObj || parents[0];
-        switchRole('parent', {
-          id: parentObj ? parentObj.id : 'prt-409',
-          name: parentObj ? (parentObj.title ? `${parentObj.title} ${parentObj.fullName}` : parentObj.fullName) : 'Chief Olabisi Adeleke',
-          email: parentObj ? parentObj.email : 'parent.adeleke@gmail.com',
-          role: 'parent',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-          referenceId: parentObj ? parentObj.parentId : 'PRT-409',
-        });
-        onClose();
-      } else {
-        setErrorMsg('Invalid Parent Email, Child Registration No, or Password!');
-      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4 animate-fade-in">
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 dark:border-slate-800 overflow-hidden">
-        
         {/* Header */}
         <div className="bg-slate-950 text-white p-6 relative">
           <button
+            type="button"
             onClick={onClose}
             className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
-          
+
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold text-lg font-serif">
               DA
             </div>
             <div>
               <h3 className="font-bold text-lg text-white font-serif">Divine Academy Portal</h3>
-              <p className="text-xs text-slate-400">Sign in to your secure school dashboard</p>
+              <p className="text-xs text-slate-400">
+                {isResetMode
+                  ? 'Reset your Supabase account password'
+                  : 'Sign in securely with your verified portal account'}
+              </p>
             </div>
           </div>
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6">
-          
-          {/* Login Form */}
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
-            {errorMsg && (
-              <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl flex items-center gap-2.5 text-xs text-red-600 dark:text-red-400 font-bold animate-bounce">
-                <AlertCircle className="w-4.5 h-4.5 text-red-500 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Select Portal Type / Account Role
-              </label>
-              <div className="relative">
-                <select
-                  value={selectedRole}
-                  onChange={(e) => handleRoleSelect(e.target.value as UserRole)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500/20 transition-all cursor-pointer appearance-none pr-10"
-                >
-                  <option value="student">🎓 Student Portal</option>
-                  <option value="teacher">👨‍🏫 Teacher & Faculty Portal</option>
-                  <option value="parent">👨‍👩‍👧 Parent & Guardian Portal</option>
-                  <option value="admin">🛡️ School Administrator Portal</option>
-                </select>
-                <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
-                  <ChevronDown className="w-4 h-4" />
+        <div className="p-6 space-y-5">
+          {!isSupabaseConfigured && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300 font-semibold">
+              <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <span>
+                Supabase connection is not configured. Add VITE_SUPABASE_URL and
+                VITE_SUPABASE_ANON_KEY to enable portal sign-in.
+              </span>
+            </div>
+          )}
+
+          {errorMsg && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl flex items-start gap-2.5 text-xs text-red-600 dark:text-red-400 font-bold">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {infoMsg && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-start gap-2.5 text-xs text-emerald-700 dark:text-emerald-300 font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+              <span>{infoMsg}</span>
+            </div>
+          )}
+
+          {isResetMode ? (
+            <form onSubmit={handleResetSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Account Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setErrorMsg('');
+                    }}
+                    placeholder="Enter your registered email address"
+                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                  />
                 </div>
               </div>
-            </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
-                <span>Registration No (Staff ID / Adm No) or Email</span>
-                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono font-normal">e.g. TCH/2026/102 or STD/2026/012</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={email}
-                onChange={(e) => handleEmailChange(e.target.value)}
-                placeholder="Enter Registration No (Staff ID / Adm No) or Email"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
-              />
-            </div>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 dark:text-slate-950 text-white font-bold py-3 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 shadow-md disabled:opacity-60"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <KeyRound className="w-4 h-4" />
+                )}
+                {isSubmitting ? 'Sending Reset Link...' : 'Send Password Reset Email'}
+              </button>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your security password"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 dark:text-slate-950 text-white font-bold py-3 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 shadow-md"
-            >
-              Sign In to Secure Portal
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
-
-          {/* Collapsible Developer Testing Console */}
-          <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
-            <details className="text-[11px] text-slate-400 dark:text-slate-500 cursor-pointer select-none">
-              <summary className="hover:text-slate-600 dark:hover:text-slate-400 font-bold uppercase tracking-wider text-[10px] flex items-center justify-center gap-1">
-                ⚙️ Quick-Fill Developer Demo Profiles
-              </summary>
-              <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2 text-left">
-                <p className="text-[10px] text-slate-500 leading-snug">
-                  Click any credential below to pre-populate the login credentials and automatically route to the corresponding dashboard portal:
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetMode(false);
+                  setErrorMsg('');
+                  setInfoMsg('');
+                }}
+                className="w-full text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 py-1.5"
+              >
+                Back to Portal Sign In
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Portal Account Category
+                </label>
+                <div className="relative">
+                  <select
+                    value={selectedRole}
+                    onChange={(e) => {
+                      setSelectedRole(e.target.value as UserRole);
+                      setErrorMsg('');
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500/20 transition-all cursor-pointer appearance-none pr-10"
+                  >
+                    <option value="student">Student Portal</option>
+                    <option value="teacher">Teacher & Faculty Portal</option>
+                    <option value="parent">Parent & Guardian Portal</option>
+                    <option value="admin">School Administrator Portal</option>
+                  </select>
+                  <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+                    <ChevronDown className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Your portal role is verified from your Supabase account profile upon sign-in.
                 </p>
-                <div className="grid grid-cols-1 gap-1.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmail('ezekielsamson1@gmail.com');
-                      setPassword('sezuo2020');
-                      setSelectedRole('admin');
-                      setErrorMsg('');
-                    }}
-                    className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
-                  >
-                    <span className="text-purple-600 dark:text-purple-400 font-bold font-sans text-[10px] uppercase block">Admin Account</span>
-                    ezekielsamson1@gmail.com
-                  </button>
+              </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmail('david.adams@divineacademy.edu');
-                      setPassword('password123');
-                      setSelectedRole('teacher');
-                      setErrorMsg('');
-                    }}
-                    className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
-                  >
-                    <span className="text-emerald-600 dark:text-emerald-400 font-bold font-sans text-[10px] uppercase block">Teacher Account</span>
-                    david.adams@divineacademy.edu
-                  </button>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Portal Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setErrorMsg('');
+                  }}
+                  placeholder="name@divineacademy.edu"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                />
+              </div>
 
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Password
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
-                      setEmail('david.adeleke@student.divineacademy.edu');
-                      setPassword('password123');
-                      setSelectedRole('student');
+                      setIsResetMode(true);
                       setErrorMsg('');
+                      setInfoMsg('');
                     }}
-                    className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
+                    className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline"
                   >
-                    <span className="text-blue-600 dark:text-blue-400 font-bold font-sans text-[10px] uppercase block">Student Account</span>
-                    david.adeleke@student.divineacademy.edu
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmail('parent.adeleke@gmail.com');
-                      setPassword('password123');
-                      setSelectedRole('parent');
-                      setErrorMsg('');
-                    }}
-                    className="w-full text-left p-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono transition-colors"
-                  >
-                    <span className="text-amber-600 dark:text-amber-400 font-bold font-sans text-[10px] uppercase block">Parent Account</span>
-                    parent.adeleke@gmail.com
+                    Forgot password?
                   </button>
                 </div>
+                <input
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your account password"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                />
               </div>
-            </details>
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 dark:text-slate-950 text-white font-bold py-3 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 shadow-md disabled:opacity-60"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Verifying Credentials...
+                  </>
+                ) : (
+                  <>
+                    Sign In to Secure Portal
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Protected by Supabase Authentication & Row Level Security</span>
           </div>
-
         </div>
-
       </div>
     </div>
   );

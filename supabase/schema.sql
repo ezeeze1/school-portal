@@ -400,7 +400,7 @@ CREATE TABLE IF NOT EXISTS public.cbt_questions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 17/26: cbt_attempts
+-- 17/27: cbt_attempts
 CREATE TABLE IF NOT EXISTS public.cbt_attempts (
   id text PRIMARY KEY,
   exam_id text NOT NULL,
@@ -414,6 +414,20 @@ CREATE TABLE IF NOT EXISTS public.cbt_attempts (
   time_taken_seconds integer NOT NULL DEFAULT 0,
   completed_at text NOT NULL,
   answers jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 18/27: cbt_exam_sessions (server-authoritative CBT timer, resume & concurrency lock)
+CREATE TABLE IF NOT EXISTS public.cbt_exam_sessions (
+  id text PRIMARY KEY,
+  exam_id text NOT NULL,
+  student_id text NOT NULL,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  submitted_at timestamptz,
+  status text NOT NULL DEFAULT 'in_progress',
+  question_order jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -585,9 +599,9 @@ BEGIN
     'user_profiles','academic_sessions','system_settings','teachers','classes',
     'subjects','students','student_result_passcodes','parents','parent_students',
     'teacher_subjects','scores','terminal_results','attendance','cbt_exams',
-    'cbt_questions','cbt_attempts','assignments','assignment_submissions',
-    'study_notes','news_items','gallery_images','online_applications',
-    'download_documents','announcements','fee_records'
+    'cbt_questions','cbt_attempts','cbt_exam_sessions','assignments',
+    'assignment_submissions','study_notes','news_items','gallery_images',
+    'online_applications','download_documents','announcements','fee_records'
   ]
   LOOP
     EXECUTE format('ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();', tbl);
@@ -777,6 +791,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cbt_attempts_student') THEN
     ALTER TABLE public.cbt_attempts ADD CONSTRAINT fk_cbt_attempts_student FOREIGN KEY (student_id) REFERENCES public.students(id) ON DELETE CASCADE;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cbt_exam_sessions_exam') THEN
+    ALTER TABLE public.cbt_exam_sessions ADD CONSTRAINT fk_cbt_exam_sessions_exam FOREIGN KEY (exam_id) REFERENCES public.cbt_exams(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cbt_exam_sessions_student') THEN
+    ALTER TABLE public.cbt_exam_sessions ADD CONSTRAINT fk_cbt_exam_sessions_student FOREIGN KEY (student_id) REFERENCES public.students(id) ON DELETE CASCADE;
+  END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_assignments_subject') THEN
     ALTER TABLE public.assignments ADD CONSTRAINT fk_assignments_subject FOREIGN KEY (subject_id) REFERENCES public.subjects(id) ON DELETE RESTRICT;
@@ -898,6 +918,13 @@ BEGIN
       AND jsonb_typeof(answers) = 'object'
     );
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_cbt_exam_sessions_valid') THEN
+    ALTER TABLE public.cbt_exam_sessions ADD CONSTRAINT chk_cbt_exam_sessions_valid CHECK (
+      status IN ('in_progress', 'submitted', 'expired')
+      AND expires_at >= started_at
+      AND jsonb_typeof(question_order) = 'array'
+    );
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_assignments_format') THEN
     ALTER TABLE public.assignments ADD CONSTRAINT chk_assignments_format CHECK (
       format IS NULL OR format IN ('text', 'word', 'pdf')
@@ -954,6 +981,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_scores_student_subject_term ON public.score
 CREATE UNIQUE INDEX IF NOT EXISTS uq_terminal_results_student_term ON public.terminal_results (student_id, session_id, term);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_student_date ON public.attendance (student_id, date);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cbt_attempts_exam_student ON public.cbt_attempts (exam_id, student_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cbt_exam_sessions_exam_student ON public.cbt_exam_sessions (exam_id, student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_assignment_submissions_pair ON public.assignment_submissions (assignment_id, student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_online_applications_number ON public.online_applications (application_number);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fee_records_receipt ON public.fee_records (receipt_no);
@@ -969,6 +997,8 @@ CREATE INDEX IF NOT EXISTS idx_cbt_exams_class_published ON public.cbt_exams (cl
 CREATE INDEX IF NOT EXISTS idx_cbt_exams_teacher_id ON public.cbt_exams (teacher_id);
 CREATE INDEX IF NOT EXISTS idx_cbt_questions_exam_order ON public.cbt_questions (exam_id, question_order);
 CREATE INDEX IF NOT EXISTS idx_cbt_attempts_student ON public.cbt_attempts (student_id);
+CREATE INDEX IF NOT EXISTS idx_cbt_exam_sessions_student ON public.cbt_exam_sessions (student_id);
+CREATE INDEX IF NOT EXISTS idx_cbt_exam_sessions_status ON public.cbt_exam_sessions (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_assignments_class_due ON public.assignments (class_id, due_date);
 CREATE INDEX IF NOT EXISTS idx_assignments_teacher_id ON public.assignments (teacher_id);
 CREATE INDEX IF NOT EXISTS idx_study_notes_class ON public.study_notes (class_id);
@@ -987,9 +1017,9 @@ BEGIN
     'user_profiles','academic_sessions','system_settings','teachers','classes',
     'subjects','students','student_result_passcodes','parents','parent_students',
     'teacher_subjects','scores','terminal_results','attendance','cbt_exams',
-    'cbt_questions','cbt_attempts','assignments','assignment_submissions',
-    'study_notes','news_items','gallery_images','online_applications',
-    'download_documents','announcements','fee_records'
+    'cbt_questions','cbt_attempts','cbt_exam_sessions','assignments',
+    'assignment_submissions','study_notes','news_items','gallery_images',
+    'online_applications','download_documents','announcements','fee_records'
   ]
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS trg_%I_updated_at ON public.%I;', tbl, tbl);
@@ -1198,6 +1228,715 @@ AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION public.parent_has_ward_in_class(target_class_id text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.parents p
+    JOIN public.parent_students ps ON ps.parent_id = p.id
+    JOIN public.students s ON s.id = ps.student_id
+    WHERE p.auth_user_id = auth.uid()
+      AND s.class_id = target_class_id
+  );
+$$;
+
+-- ----------------------------------------------------------------------------
+-- 10b. PRIORITY 4 SECURITY RPCs (AUTH PROFILE LINKING, PASSCODES, CBT ENGINE)
+-- ----------------------------------------------------------------------------
+-- Safely links an authenticated user to their pre-enrolled non-admin directory
+-- record (teacher, parent, or student). NEVER creates or promotes 'admin'.
+CREATE OR REPLACE FUNCTION public.sync_my_user_profile()
+RETURNS TABLE (
+  auth_user_id uuid,
+  role text,
+  reference_id text,
+  email text,
+  full_name text,
+  is_active boolean
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_email text;
+  v_profile public.user_profiles%ROWTYPE;
+  v_teacher public.teachers%ROWTYPE;
+  v_parent public.parents%ROWTYPE;
+  v_student public.students%ROWTYPE;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Authentication required.';
+  END IF;
+
+  SELECT lower(trim(u.email)) INTO v_email
+  FROM auth.users u
+  WHERE u.id = v_uid;
+
+  SELECT * INTO v_profile
+  FROM public.user_profiles up
+  WHERE up.auth_user_id = v_uid
+  LIMIT 1;
+
+  IF FOUND THEN
+    IF NOT v_profile.is_active THEN
+      RAISE EXCEPTION 'This account has been deactivated. Contact the school administrator.';
+    END IF;
+
+    -- Keep email synced if updated via Supabase Auth
+    IF v_email IS NOT NULL AND lower(trim(v_profile.email)) IS DISTINCT FROM v_email THEN
+      UPDATE public.user_profiles
+      SET email = v_email, updated_at = now()
+      WHERE public.user_profiles.auth_user_id = v_uid
+      RETURNING * INTO v_profile;
+    END IF;
+
+    IF v_profile.role = 'teacher' THEN
+      UPDATE public.teachers t
+      SET auth_user_id = v_uid, updated_at = now()
+      WHERE (t.id = v_profile.reference_id OR lower(trim(t.email)) = v_email)
+        AND (t.auth_user_id IS NULL OR t.auth_user_id = v_uid);
+    ELSIF v_profile.role = 'parent' THEN
+      UPDATE public.parents p
+      SET auth_user_id = v_uid, updated_at = now()
+      WHERE (p.id = v_profile.reference_id OR lower(trim(p.email)) = v_email)
+        AND (p.auth_user_id IS NULL OR p.auth_user_id = v_uid);
+    ELSIF v_profile.role = 'student' THEN
+      UPDATE public.students s
+      SET auth_user_id = v_uid, updated_at = now()
+      WHERE (s.id = v_profile.reference_id OR (s.email IS NOT NULL AND lower(trim(s.email)) = v_email))
+        AND (s.auth_user_id IS NULL OR s.auth_user_id = v_uid);
+    END IF;
+
+    RETURN QUERY SELECT v_profile.auth_user_id, v_profile.role, v_profile.reference_id, v_profile.email, v_profile.full_name, v_profile.is_active;
+    RETURN;
+  END IF;
+
+  IF v_email IS NULL OR v_email = '' THEN
+    RETURN;
+  END IF;
+
+  -- Check pre-enrolled Active teacher
+  SELECT * INTO v_teacher
+  FROM public.teachers t
+  WHERE lower(trim(t.email)) = v_email
+    AND COALESCE(t.status, 'Active') = 'Active'
+    AND (t.auth_user_id IS NULL OR t.auth_user_id = v_uid)
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE public.teachers SET auth_user_id = v_uid, updated_at = now() WHERE id = v_teacher.id;
+    INSERT INTO public.user_profiles (auth_user_id, role, reference_id, email, full_name, is_active)
+    VALUES (v_uid, 'teacher', v_teacher.id, v_email, trim(v_teacher.first_name || ' ' || v_teacher.last_name), true)
+    ON CONFLICT (auth_user_id) DO NOTHING;
+
+    SELECT * INTO v_profile FROM public.user_profiles up WHERE up.auth_user_id = v_uid;
+    RETURN QUERY SELECT v_profile.auth_user_id, v_profile.role, v_profile.reference_id, v_profile.email, v_profile.full_name, v_profile.is_active;
+    RETURN;
+  END IF;
+
+  -- Check pre-enrolled parent
+  SELECT * INTO v_parent
+  FROM public.parents p
+  WHERE lower(trim(p.email)) = v_email
+    AND (p.auth_user_id IS NULL OR p.auth_user_id = v_uid)
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE public.parents SET auth_user_id = v_uid, updated_at = now() WHERE id = v_parent.id;
+    INSERT INTO public.user_profiles (auth_user_id, role, reference_id, email, full_name, is_active)
+    VALUES (
+      v_uid,
+      'parent',
+      v_parent.id,
+      v_email,
+      trim(COALESCE(NULLIF(v_parent.title, '') || ' ', '') || v_parent.full_name),
+      true
+    )
+    ON CONFLICT (auth_user_id) DO NOTHING;
+
+    SELECT * INTO v_profile FROM public.user_profiles up WHERE up.auth_user_id = v_uid;
+    RETURN QUERY SELECT v_profile.auth_user_id, v_profile.role, v_profile.reference_id, v_profile.email, v_profile.full_name, v_profile.is_active;
+    RETURN;
+  END IF;
+
+  -- Check pre-enrolled Active student
+  SELECT * INTO v_student
+  FROM public.students s
+  WHERE s.email IS NOT NULL
+    AND lower(trim(s.email)) = v_email
+    AND s.status = 'Active'
+    AND (s.auth_user_id IS NULL OR s.auth_user_id = v_uid)
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE public.students SET auth_user_id = v_uid, updated_at = now() WHERE id = v_student.id;
+    INSERT INTO public.user_profiles (auth_user_id, role, reference_id, email, full_name, is_active)
+    VALUES (v_uid, 'student', v_student.id, v_email, trim(v_student.first_name || ' ' || v_student.last_name), true)
+    ON CONFLICT (auth_user_id) DO NOTHING;
+
+    SELECT * INTO v_profile FROM public.user_profiles up WHERE up.auth_user_id = v_uid;
+    RETURN QUERY SELECT v_profile.auth_user_id, v_profile.role, v_profile.reference_id, v_profile.email, v_profile.full_name, v_profile.is_active;
+    RETURN;
+  END IF;
+
+  RETURN;
+END;
+$$;
+
+-- Server-side verification of student result passcode (never returns the stored passcode)
+CREATE OR REPLACE FUNCTION public.verify_student_result_passcode(
+  p_student_id text,
+  p_passcode text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_stored text;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN false;
+  END IF;
+
+  IF NOT (
+    public.is_admin()
+    OR public.is_student_owner(p_student_id)
+    OR public.is_parent_of_student(p_student_id)
+  ) THEN
+    RETURN false;
+  END IF;
+
+  SELECT srp.result_passcode INTO v_stored
+  FROM public.student_result_passcodes srp
+  WHERE srp.student_id = p_student_id
+  LIMIT 1;
+
+  IF v_stored IS NULL OR trim(v_stored) = '' THEN
+    RETURN false;
+  END IF;
+
+  RETURN upper(trim(COALESCE(p_passcode, ''))) = upper(trim(v_stored));
+END;
+$$;
+
+-- Returns published CBT exam summaries for the authenticated student WITHOUT questions or answers
+CREATE OR REPLACE FUNCTION public.get_student_cbt_exams()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_student public.students%ROWTYPE;
+  v_cbt_active boolean := true;
+  v_result jsonb := '[]'::jsonb;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required.';
+  END IF;
+
+  SELECT * INTO v_student
+  FROM public.students s
+  WHERE s.auth_user_id = auth.uid()
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
+  SELECT COALESCE(ss.cbt_active, true) INTO v_cbt_active
+  FROM public.system_settings ss
+  WHERE ss.id = 'default'
+  LIMIT 1;
+
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', ce.id,
+        'title', ce.title,
+        'subjectId', ce.subject_id,
+        'subjectName', ce.subject_name,
+        'classId', ce.class_id,
+        'className', ce.class_name,
+        'term', ce.term,
+        'session', ce.session,
+        'durationMinutes', ce.duration_minutes,
+        'totalQuestions', ce.total_questions,
+        'totalMarks', ce.total_marks,
+        'passPercentage', ce.pass_percentage,
+        'startDate', ce.start_date,
+        'startTime', ce.start_time,
+        'endDate', ce.end_date,
+        'isPublished', ce.is_published,
+        'shuffleQuestions', ce.shuffle_questions,
+        'cbtActive', v_cbt_active,
+        'questions', '[]'::jsonb,
+        'hasAttempt', (ca.id IS NOT NULL),
+        'sessionStatus', ces.status,
+        'remainingSeconds', CASE
+          WHEN ces.status = 'in_progress' THEN GREATEST(0, floor(EXTRACT(EPOCH FROM (ces.expires_at - now())))::integer)
+          ELSE NULL
+        END
+      )
+      ORDER BY ce.start_date DESC, ce.created_at DESC
+    ),
+    '[]'::jsonb
+  )
+  INTO v_result
+  FROM public.cbt_exams ce
+  LEFT JOIN public.cbt_attempts ca
+    ON ca.exam_id = ce.id AND ca.student_id = v_student.id
+  LEFT JOIN public.cbt_exam_sessions ces
+    ON ces.exam_id = ce.id AND ces.student_id = v_student.id
+  WHERE ce.is_published = true
+    AND ce.class_id = v_student.class_id;
+
+  RETURN v_result;
+END;
+$$;
+
+-- Starts or resumes a CBT exam session on the server; strips correct_option & explanation
+CREATE OR REPLACE FUNCTION public.start_cbt_exam(p_exam_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_student public.students%ROWTYPE;
+  v_exam public.cbt_exams%ROWTYPE;
+  v_session public.cbt_exam_sessions%ROWTYPE;
+  v_cbt_active boolean := true;
+  v_local_now timestamp;
+  v_start_ts timestamp;
+  v_end_ts timestamp;
+  v_questions jsonb := '[]'::jsonb;
+  v_order jsonb := '[]'::jsonb;
+  v_remaining integer;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required.';
+  END IF;
+
+  SELECT * INTO v_student
+  FROM public.students s
+  WHERE s.auth_user_id = auth.uid()
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Only enrolled students can start a CBT examination.';
+  END IF;
+
+  IF v_student.status <> 'Active' THEN
+    RAISE EXCEPTION 'Your student account status (%) is not eligible for CBT examinations.', v_student.status;
+  END IF;
+
+  SELECT COALESCE(ss.cbt_active, true) INTO v_cbt_active
+  FROM public.system_settings ss
+  WHERE ss.id = 'default'
+  LIMIT 1;
+
+  IF NOT v_cbt_active THEN
+    RAISE EXCEPTION 'CBT examinations are currently disabled by the school administrator.';
+  END IF;
+
+  SELECT * INTO v_exam
+  FROM public.cbt_exams ce
+  WHERE ce.id = p_exam_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'CBT examination not found.';
+  END IF;
+
+  IF NOT v_exam.is_published THEN
+    RAISE EXCEPTION 'This CBT examination is not published.';
+  END IF;
+
+  IF v_exam.class_id <> v_student.class_id THEN
+    RAISE EXCEPTION 'You are not enrolled in the target class for this CBT examination.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.cbt_attempts ca
+    WHERE ca.exam_id = p_exam_id AND ca.student_id = v_student.id
+  ) THEN
+    RAISE EXCEPTION 'You have already completed this CBT examination (1-attempt limit).';
+  END IF;
+
+  -- Validate availability window in Nigeria local time (Africa/Lagos)
+  v_local_now := now() AT TIME ZONE 'Africa/Lagos';
+  IF v_exam.start_date ~ '^\d{4}-\d{2}-\d{2}$' THEN
+    v_start_ts := (v_exam.start_date || ' ' || COALESCE(NULLIF(trim(v_exam.start_time), ''), '00:00'))::timestamp;
+    IF v_local_now < v_start_ts THEN
+      RAISE EXCEPTION 'This CBT examination has not started yet (scheduled for % %).', v_exam.start_date, COALESCE(v_exam.start_time, '00:00');
+    END IF;
+  END IF;
+
+  IF v_exam.end_date ~ '^\d{4}-\d{2}-\d{2}$' THEN
+    v_end_ts := (v_exam.end_date || ' 23:59:59')::timestamp;
+    IF v_local_now > v_end_ts THEN
+      RAISE EXCEPTION 'The examination window for this CBT closed on %.', v_exam.end_date;
+    END IF;
+  END IF;
+
+  -- Fetch or create server-enforced exam session
+  SELECT * INTO v_session
+  FROM public.cbt_exam_sessions ces
+  WHERE ces.exam_id = p_exam_id AND ces.student_id = v_student.id
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_session.status = 'submitted' THEN
+      RAISE EXCEPTION 'This CBT exam session has already been submitted.';
+    END IF;
+    IF v_session.status = 'expired' OR now() > v_session.expires_at THEN
+      UPDATE public.cbt_exam_sessions
+      SET status = 'expired', updated_at = now()
+      WHERE id = v_session.id;
+      RAISE EXCEPTION 'Your allocated time for this CBT session has expired.';
+    END IF;
+  ELSE
+    -- Compute question order (shuffled if requested)
+    IF EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = p_exam_id) THEN
+      SELECT COALESCE(
+        jsonb_agg(sub.id ORDER BY CASE WHEN v_exam.shuffle_questions THEN random() ELSE sub.question_order::double precision END),
+        '[]'::jsonb
+      )
+      INTO v_order
+      FROM (
+        SELECT cq.id, cq.question_order
+        FROM public.cbt_questions cq
+        WHERE cq.exam_id = p_exam_id
+      ) sub;
+    ELSE
+      SELECT COALESCE(
+        jsonb_agg(sub.qid ORDER BY CASE WHEN v_exam.shuffle_questions THEN random() ELSE sub.ord::double precision END),
+        '[]'::jsonb
+      )
+      INTO v_order
+      FROM (
+        SELECT COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text) AS qid, q.ord
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_exam.questions) = 'array' THEN v_exam.questions ELSE '[]'::jsonb END) WITH ORDINALITY AS q(val, ord)
+      ) sub;
+    END IF;
+
+    INSERT INTO public.cbt_exam_sessions (
+      id, exam_id, student_id, started_at, expires_at, status, question_order
+    )
+    VALUES (
+      'cbtsess-' || md5(p_exam_id || ':' || v_student.id),
+      p_exam_id,
+      v_student.id,
+      now(),
+      now() + make_interval(mins => v_exam.duration_minutes),
+      'in_progress',
+      v_order
+    )
+    RETURNING * INTO v_session;
+  END IF;
+
+  -- Build sanitized questions array WITHOUT correctOption or explanation
+  IF EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = p_exam_id) THEN
+    SELECT COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', cq.id,
+          'question', cq.question,
+          'options', jsonb_build_object(
+            'A', cq.option_a,
+            'B', cq.option_b,
+            'C', cq.option_c,
+            'D', cq.option_d
+          ),
+          'marks', cq.marks
+        )
+        ORDER BY COALESCE(ord_idx.pos, cq.question_order::bigint)
+      ),
+      '[]'::jsonb
+    )
+    INTO v_questions
+    FROM public.cbt_questions cq
+    LEFT JOIN LATERAL jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
+      ON ord_idx.qid = cq.id
+    WHERE cq.exam_id = p_exam_id;
+  ELSE
+    SELECT COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text),
+          'question', COALESCE(q.val->>'question', ''),
+          'options', COALESCE(q.val->'options', '{}'::jsonb),
+          'marks', CASE WHEN COALESCE(trim(q.val->>'marks'), '') ~ '^\d+(\.\d+)?$' THEN (q.val->>'marks')::numeric ELSE 1 END
+        )
+        ORDER BY COALESCE(ord_idx.pos, q.ord)
+      ),
+      '[]'::jsonb
+    )
+    INTO v_questions
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_exam.questions) = 'array' THEN v_exam.questions ELSE '[]'::jsonb END) WITH ORDINALITY AS q(val, ord)
+    LEFT JOIN LATERAL jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
+      ON ord_idx.qid = COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text);
+  END IF;
+
+  v_remaining := GREATEST(0, floor(EXTRACT(EPOCH FROM (v_session.expires_at - now())))::integer);
+
+  RETURN jsonb_build_object(
+    'sessionId', v_session.id,
+    'startedAt', v_session.started_at,
+    'expiresAt', v_session.expires_at,
+    'remainingSeconds', v_remaining,
+    'exam', jsonb_build_object(
+      'id', v_exam.id,
+      'title', v_exam.title,
+      'subjectId', v_exam.subject_id,
+      'subjectName', v_exam.subject_name,
+      'classId', v_exam.class_id,
+      'className', v_exam.class_name,
+      'term', v_exam.term,
+      'session', v_exam.session,
+      'durationMinutes', v_exam.duration_minutes,
+      'totalQuestions', jsonb_array_length(v_questions),
+      'totalMarks', v_exam.total_marks,
+      'passPercentage', v_exam.pass_percentage,
+      'startDate', v_exam.start_date,
+      'startTime', v_exam.start_time,
+      'endDate', v_exam.end_date,
+      'isPublished', v_exam.is_published,
+      'shuffleQuestions', v_exam.shuffle_questions,
+      'questions', v_questions
+    )
+  );
+END;
+$$;
+
+-- Server-side grading & attempt recording; returns scored attempt + post-submission review
+CREATE OR REPLACE FUNCTION public.submit_cbt_exam(
+  p_exam_id text,
+  p_answers jsonb DEFAULT '{}'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_student public.students%ROWTYPE;
+  v_exam public.cbt_exams%ROWTYPE;
+  v_session public.cbt_exam_sessions%ROWTYPE;
+  v_answers jsonb := CASE WHEN jsonb_typeof(p_answers) = 'object' THEN p_answers ELSE '{}'::jsonb END;
+  v_score numeric(6,2) := 0;
+  v_total_marks numeric(6,2) := 0;
+  v_percentage numeric(5,2) := 0;
+  v_passed boolean := false;
+  v_time_taken integer := 1;
+  v_completed_at text := to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+  v_attempt_id text;
+  v_review jsonb := '[]'::jsonb;
+  v_attempt_row public.cbt_attempts%ROWTYPE;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required.';
+  END IF;
+
+  SELECT * INTO v_student
+  FROM public.students s
+  WHERE s.auth_user_id = auth.uid()
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Only enrolled students can submit CBT examinations.';
+  END IF;
+
+  SELECT * INTO v_exam
+  FROM public.cbt_exams ce
+  WHERE ce.id = p_exam_id
+  LIMIT 1;
+
+  IF NOT FOUND OR NOT v_exam.is_published OR v_exam.class_id <> v_student.class_id THEN
+    RAISE EXCEPTION 'You are not authorized to submit this CBT examination.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.cbt_attempts ca
+    WHERE ca.exam_id = p_exam_id AND ca.student_id = v_student.id
+  ) THEN
+    RAISE EXCEPTION 'A completed attempt already exists for this CBT examination.';
+  END IF;
+
+  SELECT * INTO v_session
+  FROM public.cbt_exam_sessions ces
+  WHERE ces.exam_id = p_exam_id AND ces.student_id = v_student.id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No active CBT exam session found. Start the exam first.';
+  END IF;
+
+  IF v_session.status <> 'in_progress' THEN
+    RAISE EXCEPTION 'This CBT exam session is no longer active (%).', v_session.status;
+  END IF;
+
+  -- Allow brief 20-second network grace window for client auto-submit on expiry
+  IF now() > v_session.expires_at + interval '20 seconds' THEN
+    UPDATE public.cbt_exam_sessions
+    SET status = 'expired', updated_at = now()
+    WHERE id = v_session.id;
+    RAISE EXCEPTION 'Exam submission window has expired.';
+  END IF;
+
+  v_time_taken := GREATEST(
+    1,
+    LEAST(
+      v_exam.duration_minutes * 60,
+      floor(EXTRACT(EPOCH FROM (now() - v_session.started_at)))::integer
+    )
+  );
+
+  -- Compute marks and build post-submission review strictly on the server
+  IF EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = p_exam_id) THEN
+    WITH ordered_q AS (
+      SELECT
+        cq.id,
+        cq.question,
+        jsonb_build_object('A', cq.option_a, 'B', cq.option_b, 'C', cq.option_c, 'D', cq.option_d) AS options,
+        cq.correct_option,
+        cq.explanation,
+        cq.marks,
+        upper(trim(COALESCE(v_answers->>cq.id, ''))) AS selected_opt,
+        COALESCE(ord_idx.pos, cq.question_order::bigint) AS sort_pos
+      FROM public.cbt_questions cq
+      LEFT JOIN LATERAL jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
+        ON ord_idx.qid = cq.id
+      WHERE cq.exam_id = p_exam_id
+    )
+    SELECT
+      COALESCE(sum(CASE WHEN selected_opt = correct_option THEN marks ELSE 0 END), 0),
+      COALESCE(sum(marks), 0),
+      COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'questionId', id,
+            'question', question,
+            'options', options,
+            'selectedOption', NULLIF(selected_opt, ''),
+            'correctOption', correct_option,
+            'explanation', explanation,
+            'marks', marks,
+            'earnedMarks', CASE WHEN selected_opt = correct_option THEN marks ELSE 0 END,
+            'isCorrect', (selected_opt = correct_option)
+          )
+          ORDER BY sort_pos
+        ),
+        '[]'::jsonb
+      )
+    INTO v_score, v_total_marks, v_review
+    FROM ordered_q;
+  ELSE
+    WITH ordered_q AS (
+      SELECT
+        COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text) AS id,
+        COALESCE(q.val->>'question', '') AS question,
+        COALESCE(q.val->'options', '{}'::jsonb) AS options,
+        CASE WHEN upper(COALESCE(q.val->>'correctOption', 'A')) IN ('A','B','C','D') THEN upper(q.val->>'correctOption') ELSE 'A' END AS correct_option,
+        q.val->>'explanation' AS explanation,
+        CASE WHEN COALESCE(trim(q.val->>'marks'), '') ~ '^\d+(\.\d+)?$' THEN (q.val->>'marks')::numeric ELSE 1 END AS marks,
+        upper(trim(COALESCE(v_answers->>COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text), ''))) AS selected_opt,
+        COALESCE(ord_idx.pos, q.ord) AS sort_pos
+      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_exam.questions) = 'array' THEN v_exam.questions ELSE '[]'::jsonb END) WITH ORDINALITY AS q(val, ord)
+      LEFT JOIN LATERAL jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
+        ON ord_idx.qid = COALESCE(NULLIF(trim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text)
+    )
+    SELECT
+      COALESCE(sum(CASE WHEN selected_opt = correct_option THEN marks ELSE 0 END), 0),
+      COALESCE(sum(marks), 0),
+      COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'questionId', id,
+            'question', question,
+            'options', options,
+            'selectedOption', NULLIF(selected_opt, ''),
+            'correctOption', correct_option,
+            'explanation', explanation,
+            'marks', marks,
+            'earnedMarks', CASE WHEN selected_opt = correct_option THEN marks ELSE 0 END,
+            'isCorrect', (selected_opt = correct_option)
+          )
+          ORDER BY sort_pos
+        ),
+        '[]'::jsonb
+      )
+    INTO v_score, v_total_marks, v_review
+    FROM ordered_q;
+  END IF;
+
+  IF v_total_marks <= 0 THEN
+    v_total_marks := GREATEST(v_exam.total_marks, 1);
+  END IF;
+
+  v_percentage := round((v_score / v_total_marks) * 100.0, 2);
+  v_passed := v_percentage >= COALESCE(v_exam.pass_percentage, 50);
+  v_attempt_id := 'attmpt-' || substr(md5(p_exam_id || ':' || v_student.id || ':' || now()::text), 1, 16);
+
+  INSERT INTO public.cbt_attempts (
+    id, exam_id, student_id, student_name, admission_no,
+    score_obtained, total_marks, percentage, passed,
+    time_taken_seconds, completed_at, answers
+  )
+  VALUES (
+    v_attempt_id,
+    p_exam_id,
+    v_student.id,
+    trim(v_student.first_name || ' ' || v_student.last_name),
+    v_student.admission_no,
+    v_score,
+    v_total_marks,
+    v_percentage,
+    v_passed,
+    v_time_taken,
+    v_completed_at,
+    v_answers
+  )
+  RETURNING * INTO v_attempt_row;
+
+  UPDATE public.cbt_exam_sessions
+  SET status = 'submitted',
+      submitted_at = now(),
+      updated_at = now()
+  WHERE id = v_session.id;
+
+  RETURN jsonb_build_object(
+    'attempt', jsonb_build_object(
+      'id', v_attempt_row.id,
+      'examId', v_attempt_row.exam_id,
+      'studentId', v_attempt_row.student_id,
+      'studentName', v_attempt_row.student_name,
+      'admissionNo', v_attempt_row.admission_no,
+      'scoreObtained', v_attempt_row.score_obtained,
+      'totalMarks', v_attempt_row.total_marks,
+      'percentage', v_attempt_row.percentage,
+      'passed', v_attempt_row.passed,
+      'timeTakenSeconds', v_attempt_row.time_taken_seconds,
+      'completedAt', v_attempt_row.completed_at,
+      'answers', v_attempt_row.answers
+    ),
+    'review', v_review
+  );
+END;
+$$;
+
 -- ----------------------------------------------------------------------------
 -- 11. EXPLICIT LEAST-PRIVILEGE GRANTS & REVOKES
 --     (RLS policies filter rows; PostgreSQL privilege GRANTs govern table/column access.)
@@ -1236,6 +1975,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   public.cbt_exams,
   public.cbt_questions,
   public.cbt_attempts,
+  public.cbt_exam_sessions,
   public.assignments,
   public.assignment_submissions,
   public.study_notes,
@@ -1284,7 +2024,13 @@ REVOKE ALL ON FUNCTION
   public.teacher_assigned_to_class(text),
   public.is_student_owner(text),
   public.is_parent_of_student(text),
-  public.student_in_class(text)
+  public.student_in_class(text),
+  public.parent_has_ward_in_class(text),
+  public.sync_my_user_profile(),
+  public.verify_student_result_passcode(text, text),
+  public.get_student_cbt_exams(),
+  public.start_cbt_exam(text),
+  public.submit_cbt_exam(text, jsonb)
 FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION
@@ -1298,7 +2044,13 @@ GRANT EXECUTE ON FUNCTION
   public.teacher_assigned_to_class(text),
   public.is_student_owner(text),
   public.is_parent_of_student(text),
-  public.student_in_class(text)
+  public.student_in_class(text),
+  public.parent_has_ward_in_class(text),
+  public.sync_my_user_profile(),
+  public.verify_student_result_passcode(text, text),
+  public.get_student_cbt_exams(),
+  public.start_cbt_exam(text),
+  public.submit_cbt_exam(text, jsonb)
 TO authenticated, service_role;
 
 -- ----------------------------------------------------------------------------
@@ -1312,9 +2064,9 @@ BEGIN
     'user_profiles','academic_sessions','system_settings','teachers','classes',
     'subjects','students','student_result_passcodes','parents','parent_students',
     'teacher_subjects','scores','terminal_results','attendance','cbt_exams',
-    'cbt_questions','cbt_attempts','assignments','assignment_submissions',
-    'study_notes','news_items','gallery_images','online_applications',
-    'download_documents','announcements','fee_records'
+    'cbt_questions','cbt_attempts','cbt_exam_sessions','assignments',
+    'assignment_submissions','study_notes','news_items','gallery_images',
+    'online_applications','download_documents','announcements','fee_records'
   ]
   LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY;', tbl);
@@ -1334,9 +2086,9 @@ BEGIN
         'user_profiles','academic_sessions','system_settings','teachers','classes',
         'subjects','students','student_result_passcodes','parents','parent_students',
         'teacher_subjects','scores','terminal_results','attendance','cbt_exams',
-        'cbt_questions','cbt_attempts','assignments','assignment_submissions',
-        'study_notes','news_items','gallery_images','online_applications',
-        'download_documents','announcements','fee_records'
+        'cbt_questions','cbt_attempts','cbt_exam_sessions','assignments',
+        'assignment_submissions','study_notes','news_items','gallery_images',
+        'online_applications','download_documents','announcements','fee_records'
       )
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I;', pol.policyname, pol.tablename);
@@ -1418,17 +2170,27 @@ CREATE POLICY "admin_manage_applications"
   ON public.online_applications FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- D. CURRICULUM STRUCTURE (Authenticated users read; Admin manages)
-CREATE POLICY "authenticated_read_classes"
+-- D. CURRICULUM STRUCTURE (Role-scoped reads; Admin manages)
+-- Teachers read only classes & subjects assigned to them; students read own class; parents read ward classes
+CREATE POLICY "classes_scoped_select"
   ON public.classes FOR SELECT TO authenticated
-  USING (public.current_app_role() IN ('admin', 'teacher', 'student', 'parent'));
+  USING (
+    public.is_admin()
+    OR (public.is_teacher() AND public.teacher_assigned_to_class(id))
+    OR public.student_in_class(id)
+    OR public.parent_has_ward_in_class(id)
+  );
 CREATE POLICY "admin_manage_classes"
   ON public.classes FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
-CREATE POLICY "authenticated_read_subjects"
+CREATE POLICY "subjects_scoped_select"
   ON public.subjects FOR SELECT TO authenticated
-  USING (public.current_app_role() IN ('admin', 'teacher', 'student', 'parent'));
+  USING (
+    public.is_admin()
+    OR (public.is_teacher() AND public.teacher_teaches_subject(id))
+    OR public.current_app_role() IN ('student', 'parent')
+  );
 CREATE POLICY "admin_manage_subjects"
   ON public.subjects FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
@@ -1441,12 +2203,12 @@ CREATE POLICY "admin_manage_profiles"
   ON public.user_profiles FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- Students: column grants block password/result_passcode; students only see own row
+-- Students: column grants block password/result_passcode; teachers only see students in assigned classes
 CREATE POLICY "students_scoped_select"
   ON public.students FOR SELECT TO authenticated
   USING (
     public.is_admin()
-    OR public.is_teacher()
+    OR (public.is_teacher() AND public.teacher_assigned_to_class(class_id))
     OR auth_user_id = auth.uid()
     OR public.is_parent_of_student(id)
   );
@@ -1454,15 +2216,15 @@ CREATE POLICY "admin_manage_students"
   ON public.students FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- Result Passcodes isolated exclusively to Admin
+-- Result Passcodes isolated exclusively to Admin (verified via verify_student_result_passcode RPC)
 CREATE POLICY "admin_only_result_passcodes"
   ON public.student_result_passcodes FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- Teachers: column grants exclude password; Admin manages all teacher rows
+-- Teachers: column grants exclude password; non-admin teachers see only their own teacher record
 CREATE POLICY "teachers_scoped_select"
   ON public.teachers FOR SELECT TO authenticated
-  USING (public.is_admin() OR public.is_teacher() OR auth_user_id = auth.uid());
+  USING (public.is_admin() OR auth_user_id = auth.uid());
 CREATE POLICY "admin_manage_teachers"
   ON public.teachers FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
@@ -1487,18 +2249,25 @@ CREATE POLICY "admin_manage_parent_students"
 
 CREATE POLICY "teacher_subjects_scoped_select"
   ON public.teacher_subjects FOR SELECT TO authenticated
-  USING (public.is_admin() OR public.is_teacher());
+  USING (public.is_admin() OR public.is_own_teacher_id(teacher_id));
 CREATE POLICY "admin_manage_teacher_subjects"
   ON public.teacher_subjects FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
 
 -- F. ACADEMIC RECORDS (SCORES, RESULTS, ATTENDANCE)
--- Teachers can only insert/update/delete scores they own & teach (or Admin manages all)
+-- Teachers can only read/write scores for their own assigned classes/subjects or own teacher_id
 CREATE POLICY "scores_scoped_select"
   ON public.scores FOR SELECT TO authenticated
   USING (
     public.is_admin()
-    OR public.is_teacher()
+    OR (
+      public.is_teacher()
+      AND (
+        public.is_own_teacher_id(teacher_id)
+        OR public.teacher_teaches_subject(subject_id)
+        OR public.teacher_is_form_teacher(class_id)
+      )
+    )
     OR public.is_student_owner(student_id)
     OR public.is_parent_of_student(student_id)
   );
@@ -1510,6 +2279,7 @@ CREATE POLICY "teacher_insert_own_scores"
   WITH CHECK (
     public.is_teacher()
     AND public.is_own_teacher_id(teacher_id)
+    AND public.teacher_assigned_to_class(class_id)
     AND (public.teacher_teaches_subject(subject_id) OR public.teacher_is_form_teacher(class_id))
   );
 CREATE POLICY "teacher_update_own_scores"
@@ -1518,6 +2288,7 @@ CREATE POLICY "teacher_update_own_scores"
   WITH CHECK (
     public.is_teacher()
     AND public.is_own_teacher_id(teacher_id)
+    AND public.teacher_assigned_to_class(class_id)
     AND (public.teacher_teaches_subject(subject_id) OR public.teacher_is_form_teacher(class_id))
   );
 CREATE POLICY "teacher_delete_own_scores"
@@ -1529,7 +2300,7 @@ CREATE POLICY "terminal_results_scoped_select"
   ON public.terminal_results FOR SELECT TO authenticated
   USING (
     public.is_admin()
-    OR public.is_teacher()
+    OR (public.is_teacher() AND public.teacher_is_form_teacher(class_id))
     OR (status = 'Published' AND (public.is_student_owner(student_id) OR public.is_parent_of_student(student_id)))
   );
 CREATE POLICY "admin_manage_terminal_results"
@@ -1540,12 +2311,12 @@ CREATE POLICY "form_teacher_manage_terminal_results"
   USING (public.is_teacher() AND public.teacher_is_form_teacher(class_id))
   WITH CHECK (public.is_teacher() AND public.teacher_is_form_teacher(class_id));
 
--- Attendance: Admin manages all; teachers assigned to that class manage attendance
+-- Attendance: Admin manages all; teachers assigned to that class read & manage attendance
 CREATE POLICY "attendance_scoped_select"
   ON public.attendance FOR SELECT TO authenticated
   USING (
     public.is_admin()
-    OR public.is_teacher()
+    OR (public.is_teacher() AND public.teacher_assigned_to_class(class_id))
     OR public.is_student_owner(student_id)
     OR public.is_parent_of_student(student_id)
   );
@@ -1557,13 +2328,16 @@ CREATE POLICY "assigned_teacher_manage_attendance"
   USING (public.is_teacher() AND public.teacher_assigned_to_class(class_id))
   WITH CHECK (public.is_teacher() AND public.teacher_assigned_to_class(class_id));
 
--- G. CBT EXAMS, QUESTIONS & ATTEMPTS (OWNER-SCOPED TEACHER WRITES + FULL ADMIN CONTROL)
+-- G. CBT EXAMS, QUESTIONS, SESSIONS & ATTEMPTS
+-- CRITICAL: Students cannot SELECT cbt_exams or cbt_questions directly (answer key protection).
+-- Students use get_student_cbt_exams(), start_cbt_exam(), and submit_cbt_exam() RPCs.
+-- Students cannot INSERT or UPDATE cbt_attempts directly (server-authoritative scoring).
 CREATE POLICY "admin_manage_cbt_exams"
   ON public.cbt_exams FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
-CREATE POLICY "teacher_read_cbt_exams"
+CREATE POLICY "teacher_read_own_cbt_exams"
   ON public.cbt_exams FOR SELECT TO authenticated
-  USING (public.is_teacher());
+  USING (public.is_teacher() AND public.is_own_teacher_id(teacher_id));
 CREATE POLICY "teacher_insert_own_cbt_exams"
   ON public.cbt_exams FOR INSERT TO authenticated
   WITH CHECK (public.is_teacher() AND public.is_own_teacher_id(teacher_id));
@@ -1578,9 +2352,6 @@ CREATE POLICY "teacher_delete_own_cbt_exams"
 CREATE POLICY "admin_manage_cbt_questions"
   ON public.cbt_questions FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
-CREATE POLICY "teacher_read_cbt_questions"
-  ON public.cbt_questions FOR SELECT TO authenticated
-  USING (public.is_teacher());
 CREATE POLICY "teacher_manage_own_cbt_questions"
   ON public.cbt_questions FOR ALL TO authenticated
   USING (
@@ -1598,6 +2369,33 @@ CREATE POLICY "teacher_manage_own_cbt_questions"
     )
   );
 
+-- CBT Sessions: Admin full control; student/owner-teacher read-only; mutations only via RPCs
+CREATE POLICY "admin_manage_cbt_exam_sessions"
+  ON public.cbt_exam_sessions FOR ALL TO authenticated
+  USING (public.is_admin()) WITH CHECK (public.is_admin());
+CREATE POLICY "cbt_exam_sessions_scoped_select"
+  ON public.cbt_exam_sessions FOR SELECT TO authenticated
+  USING (
+    public.is_student_owner(student_id)
+    OR (
+      public.is_teacher()
+      AND EXISTS (
+        SELECT 1 FROM public.cbt_exams ce
+        WHERE ce.id = exam_id AND public.is_own_teacher_id(ce.teacher_id)
+      )
+    )
+  );
+CREATE POLICY "cbt_exam_sessions_owner_teacher_delete"
+  ON public.cbt_exam_sessions FOR DELETE TO authenticated
+  USING (
+    public.is_teacher()
+    AND EXISTS (
+      SELECT 1 FROM public.cbt_exams ce
+      WHERE ce.id = exam_id AND public.is_own_teacher_id(ce.teacher_id)
+    )
+  );
+
+-- CBT Attempts: immutable for students & parents; Admin manages all; owner teacher reads & can reset (DELETE)
 CREATE POLICY "admin_manage_cbt_attempts"
   ON public.cbt_attempts FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
@@ -1614,9 +2412,6 @@ CREATE POLICY "cbt_attempts_scoped_select"
       )
     )
   );
-CREATE POLICY "cbt_attempts_student_insert"
-  ON public.cbt_attempts FOR INSERT TO authenticated
-  WITH CHECK (public.is_student_owner(student_id));
 CREATE POLICY "cbt_attempts_owner_teacher_delete"
   ON public.cbt_attempts FOR DELETE TO authenticated
   USING (
@@ -1630,7 +2425,11 @@ CREATE POLICY "cbt_attempts_owner_teacher_delete"
 -- H. ASSIGNMENTS, SUBMISSIONS & STUDY NOTES (OWNER-SCOPED TEACHER WRITES + ADMIN ALL)
 CREATE POLICY "assignments_scoped_select"
   ON public.assignments FOR SELECT TO authenticated
-  USING (public.is_admin() OR public.is_teacher() OR public.student_in_class(class_id));
+  USING (
+    public.is_admin()
+    OR (public.is_teacher() AND (public.is_own_teacher_id(teacher_id) OR public.teacher_assigned_to_class(class_id)))
+    OR public.student_in_class(class_id)
+  );
 CREATE POLICY "admin_manage_assignments"
   ON public.assignments FOR ALL TO authenticated
   USING (public.is_admin()) WITH CHECK (public.is_admin());
@@ -1663,7 +2462,19 @@ CREATE POLICY "assignment_submissions_scoped_select"
   );
 CREATE POLICY "assignment_submissions_student_insert"
   ON public.assignment_submissions FOR INSERT TO authenticated
-  WITH CHECK (public.is_student_owner(student_id));
+  WITH CHECK (
+    public.is_student_owner(student_id)
+    AND grade IS NULL
+    AND feedback IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.assignments a
+      JOIN public.students s ON s.id = student_id
+      WHERE a.id = assignment_id
+        AND a.class_id = s.class_id
+        AND s.status = 'Active'
+    )
+  );
 CREATE POLICY "teacher_grade_own_assignment_submissions"
   ON public.assignment_submissions FOR UPDATE TO authenticated
   USING (
@@ -1685,9 +2496,14 @@ CREATE POLICY "study_notes_scoped_select"
   ON public.study_notes FOR SELECT TO authenticated
   USING (
     public.is_admin()
-    OR public.is_teacher()
-    OR class_id IS NULL
-    OR public.student_in_class(class_id)
+    OR (
+      public.is_teacher()
+      AND (public.is_own_teacher_id(teacher_id) OR class_id IS NULL OR public.teacher_assigned_to_class(class_id))
+    )
+    OR (
+      public.current_app_role() IN ('student', 'parent')
+      AND (class_id IS NULL OR public.student_in_class(class_id))
+    )
   );
 CREATE POLICY "admin_manage_study_notes"
   ON public.study_notes FOR ALL TO authenticated

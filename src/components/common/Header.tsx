@@ -26,7 +26,7 @@ import {
 import { LoginModal } from '../auth/LoginModal';
 
 export const Header: React.FC = () => {
-  const { currentUser, activeRole, switchRole, logout, currentView, setCurrentView, systemSettings } = useSchool();
+  const { currentUser, activeRole, authLoading, logout, currentView, setCurrentView, systemSettings } = useSchool();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [loginModalDefaultRole, setLoginModalDefaultRole] = useState<UserRole>('student');
@@ -195,10 +195,11 @@ export const Header: React.FC = () => {
           ) : (
             <button
               onClick={() => openLoginForRole('student')}
-              className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl font-bold text-sm transition-all shadow-md flex items-center gap-2"
+              disabled={authLoading}
+              className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl font-bold text-sm transition-all shadow-md flex items-center gap-2 disabled:opacity-60"
             >
               <User className="w-4 h-4 text-amber-400" />
-              Portal Login
+              {authLoading ? 'Loading Session...' : 'Portal Login'}
             </button>
           )}
 

@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Assignment, StudyNote } from '../../types';
-import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileCode, Paperclip, Download, Eye, AlertCircle, Sparkles, Send } from 'lucide-react';
+import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileCode, Paperclip, Download, Send, Users, Award, ExternalLink } from 'lucide-react';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AssignmentsManager: React.FC = () => {
-  const { assignments, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects, teachers, currentUser } = useSchool();
+  const { assignments, assignmentSubmissions, gradeAssignmentSubmission, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects, teachers, currentUser } = useSchool();
   const matchedTeacher =
     currentUser?.role === 'teacher'
       ? teachers.find(
@@ -20,6 +20,10 @@ export const AssignmentsManager: React.FC = () => {
     : currentUser?.name || 'School Educator';
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
   const [assignmentToDelete, setAssignmentToDelete] = useState<Assignment | null>(null);
+  const [expandedAssignmentId, setExpandedAssignmentId] = useState<string | null>(null);
+  const [gradingDrafts, setGradingDrafts] = useState<Record<string, { grade: string; feedback: string }>>({});
+  const [savingSubmissionId, setSavingSubmissionId] = useState<string | null>(null);
+  const [gradeNotice, setGradeNotice] = useState<{ id: string; ok: boolean; text: string } | null>(null);
 
   // Assignment Form State
   const [asgTitle, setAsgTitle] = useState('');
@@ -185,6 +189,32 @@ export const AssignmentsManager: React.FC = () => {
     setNoteFileSize('');
     setSuccessMsg(`Lecture Note "${newNote.title}" uploaded successfully for ${targetClassName}!`);
     setTimeout(() => setSuccessMsg(null), 4000);
+  };
+
+  const handleSaveSubmissionGrade = async (submissionId: string, maxMarks: number) => {
+    const draft = gradingDrafts[submissionId];
+    const existing = assignmentSubmissions.find((s) => s.id === submissionId);
+    const gradeRaw = draft ? draft.grade : existing?.grade !== undefined ? String(existing.grade) : '';
+    const feedbackRaw = draft ? draft.feedback : existing?.feedback || '';
+
+    const numericGrade = gradeRaw.trim() === '' ? undefined : Number(gradeRaw);
+    if (numericGrade !== undefined && (Number.isNaN(numericGrade) || numericGrade < 0 || numericGrade > maxMarks)) {
+      setGradeNotice({ id: submissionId, ok: false, text: `Enter a score between 0 and ${maxMarks}.` });
+      return;
+    }
+
+    setSavingSubmissionId(submissionId);
+    setGradeNotice(null);
+    try {
+      const res = await gradeAssignmentSubmission(submissionId, numericGrade, feedbackRaw.trim() || undefined);
+      if (res.ok) {
+        setGradeNotice({ id: submissionId, ok: true, text: 'Grade saved.' });
+      } else {
+        setGradeNotice({ id: submissionId, ok: false, text: res.error || 'Failed to save grade.' });
+      }
+    } finally {
+      setSavingSubmissionId(null);
+    }
   };
 
   return (
@@ -410,6 +440,10 @@ export const AssignmentsManager: React.FC = () => {
 
             {assignments.map((asg) => {
               const fmt = asg.format || 'text';
+              const subs = assignmentSubmissions.filter((s) => s.assignmentId === asg.id);
+              const isExpanded = expandedAssignmentId === asg.id;
+              const maxMarks = asg.totalMarks || 20;
+
               return (
                 <div key={asg.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 space-y-3 shadow-sm hover:shadow-md transition-all">
                   <div className="flex flex-wrap justify-between items-start gap-2">
@@ -484,18 +518,125 @@ export const AssignmentsManager: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="pt-2 flex justify-between items-center text-xs border-t border-slate-100 dark:border-slate-800">
+                  <div className="pt-2 flex flex-wrap justify-between items-center gap-2 text-xs border-t border-slate-100 dark:border-slate-800">
                     <span className="text-[11px] text-slate-500">Posted by {asg.teacherName} on {asg.createdDate}</span>
 
-                    {deleteAssignment && (
+                    <div className="flex items-center gap-3">
                       <button
-                        onClick={() => setAssignmentToDelete(asg)}
-                        className="text-rose-500 hover:text-rose-700 font-bold flex items-center gap-1 text-[11px]"
+                        type="button"
+                        onClick={() => setExpandedAssignmentId(isExpanded ? null : asg.id)}
+                        className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold px-3 py-1.5 rounded-xl text-[11px] flex items-center gap-1.5 transition-colors"
                       >
-                        <Trash2 className="w-3.5 h-3.5" /> Remove Assignment
+                        <Users className="w-3.5 h-3.5 text-amber-500" />
+                        {isExpanded ? 'Hide' : 'View'} Submissions ({subs.length})
                       </button>
-                    )}
+
+                      {deleteAssignment && (
+                        <button
+                          onClick={() => setAssignmentToDelete(asg)}
+                          className="text-rose-500 hover:text-rose-700 font-bold flex items-center gap-1 text-[11px]"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Remove Assignment
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Student Submissions & Grading Panel */}
+                  {isExpanded && (
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                      {subs.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl">
+                          No student submissions received yet for this assignment.
+                        </p>
+                      ) : (
+                        subs.map((sub) => {
+                          const draft = gradingDrafts[sub.id] ?? {
+                            grade: sub.grade !== undefined && sub.grade !== null ? String(sub.grade) : '',
+                            feedback: sub.feedback || '',
+                          };
+                          const isSaving = savingSubmissionId === sub.id;
+
+                          return (
+                            <div
+                              key={sub.id}
+                              className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs"
+                            >
+                              <div className="flex flex-wrap justify-between items-center gap-2">
+                                <div>
+                                  <span className="font-bold text-slate-900 dark:text-white">{sub.studentName}</span>
+                                  <span className="text-[11px] text-slate-500 ml-2">Submitted {sub.submissionDate}</span>
+                                </div>
+                                {sub.grade !== undefined && sub.grade !== null && (
+                                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-[11px] flex items-center gap-1">
+                                    <Award className="w-3 h-3" /> {sub.grade} / {maxMarks}
+                                  </span>
+                                )}
+                              </div>
+
+                              <p className="text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 whitespace-pre-wrap">
+                                {sub.content}
+                              </p>
+
+                              {sub.fileUrl && (
+                                <a
+                                  href={sub.fileUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline"
+                                >
+                                  <ExternalLink className="w-3 h-3" /> Open Attached File
+                                </a>
+                              )}
+
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={maxMarks}
+                                  placeholder={`Score / ${maxMarks}`}
+                                  value={draft.grade}
+                                  onChange={(e) =>
+                                    setGradingDrafts((prev) => ({
+                                      ...prev,
+                                      [sub.id]: { ...draft, grade: e.target.value },
+                                    }))
+                                  }
+                                  className="w-24 px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-900 dark:text-white"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Feedback / remarks for student..."
+                                  value={draft.feedback}
+                                  onChange={(e) =>
+                                    setGradingDrafts((prev) => ({
+                                      ...prev,
+                                      [sub.id]: { ...draft, feedback: e.target.value },
+                                    }))
+                                  }
+                                  className="flex-1 min-w-[180px] px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-white"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={isSaving}
+                                  onClick={() => void handleSaveSubmissionGrade(sub.id, maxMarks)}
+                                  className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-[11px]"
+                                >
+                                  {isSaving ? 'Saving...' : 'Save Grade'}
+                                </button>
+                              </div>
+
+                              {gradeNotice && gradeNotice.id === sub.id && (
+                                <p className={`text-[11px] font-bold ${gradeNotice.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                                  {gradeNotice.text}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

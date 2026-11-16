@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Teacher } from '../../types';
-import { Users, FileSpreadsheet, Clock, Archive, BookOpen, GraduationCap, UserPlus, Send, FileText } from 'lucide-react';
+import { Users, FileSpreadsheet, Clock, Archive, GraduationCap, Send } from 'lucide-react';
 
 export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: string) => void }> = ({
   teacher,
@@ -11,17 +11,20 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
 
   const currentTeacher =
     teacher ||
-    teachers.find(
-      (t) =>
-        t.id === currentUser?.id ||
-        t.staffId?.toLowerCase() === currentUser?.referenceId?.toLowerCase() ||
-        t.email.toLowerCase() === currentUser?.email?.toLowerCase()
-    ) ||
-    teachers[0];
+    (currentUser
+      ? teachers.find(
+          (t) =>
+            (currentUser.authUserId && t.authUserId === currentUser.authUserId) ||
+            t.id === currentUser.id ||
+            (currentUser.referenceId &&
+              t.staffId?.toLowerCase() === currentUser.referenceId.toLowerCase()) ||
+            (currentUser.email && t.email.toLowerCase() === currentUser.email.toLowerCase())
+        )
+      : undefined);
 
   const teacherName = currentTeacher
     ? `${currentTeacher.firstName} ${currentTeacher.lastName}`
-    : (currentUser?.name || 'Faculty Member');
+    : currentUser?.name || 'Faculty Member';
 
   const formClassBadge = currentTeacher?.formClassName
     ? `Form Teacher (${currentTeacher.formClassName})`
@@ -29,16 +32,13 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
-      
       {/* Welcome Banner */}
       <div className="bg-slate-900 text-white rounded-3xl p-8 border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-6 shadow-2xl">
         <div className="space-y-1">
           <span className="text-amber-400 font-bold text-xs uppercase tracking-wider">
             Faculty Member Portal • {formClassBadge}
           </span>
-          <h1 className="font-serif font-bold text-2xl sm:text-3xl">
-            Welcome, {teacherName}
-          </h1>
+          <h1 className="font-serif font-bold text-2xl sm:text-3xl">Welcome, {teacherName}</h1>
           <p className="text-xs text-slate-400">
             Current Session: {systemSettings.currentSession} ({systemSettings.currentTerm})
           </p>
@@ -55,7 +55,7 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
             onClick={() => onNavigate('students')}
             className="bg-slate-800 hover:bg-slate-700 text-white font-bold px-4 py-3 rounded-xl text-xs flex items-center gap-2 border border-slate-700"
           >
-            <UserPlus className="w-4 h-4" /> Enroll Student
+            <GraduationCap className="w-4 h-4" /> Class Roster
           </button>
           <button
             onClick={() => onNavigate('scores')}
@@ -68,14 +68,15 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        
         <div
           onClick={() => onNavigate('students')}
           className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm cursor-pointer hover:border-amber-400 transition-colors"
         >
-          <span className="text-xs font-bold uppercase text-slate-500">Enrolled Students</span>
-          <p className="font-serif font-black text-3xl text-slate-900 dark:text-white">{students.length}</p>
-          <p className="text-[11px] text-amber-600 font-semibold">+ Add / Edit Students</p>
+          <span className="text-xs font-bold uppercase text-slate-500">Assigned Class Students</span>
+          <p className="font-serif font-black text-3xl text-slate-900 dark:text-white">
+            {students.length}
+          </p>
+          <p className="text-[11px] text-amber-600 font-semibold">View Class Roster</p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm">
@@ -88,7 +89,9 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
           onClick={() => onNavigate('assignments')}
           className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm cursor-pointer hover:border-amber-400 transition-colors"
         >
-          <span className="text-xs font-bold uppercase text-slate-500 font-semibold">Active Assignments</span>
+          <span className="text-xs font-bold uppercase text-slate-500 font-semibold">
+            Active Assignments
+          </span>
           <p className="font-serif font-black text-3xl text-blue-600">{assignments.length}</p>
           <p className="text-[11px] text-amber-600 font-semibold">+ Send Text / Word / PDF</p>
         </div>
@@ -98,7 +101,6 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
           <p className="font-serif font-black text-3xl text-emerald-600">Complete</p>
           <p className="text-[11px] text-slate-500">Roll call up to date</p>
         </div>
-
       </div>
 
       {/* Shortcut Buttons */}
@@ -114,10 +116,16 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
           >
             <div className="flex items-center justify-between">
               <Send className="w-6 h-6 text-amber-600 dark:text-amber-400" />
-              <span className="text-[10px] font-black uppercase tracking-wider bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded">NEW</span>
+              <span className="text-[10px] font-black uppercase tracking-wider bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded">
+                NEW
+              </span>
             </div>
-            <p className="font-bold text-sm text-slate-900 dark:text-white">Send Assignment to Students</p>
-            <p className="text-xs text-slate-500">Post homework tasks in Text, Word (.docx), or PDF (.pdf) format</p>
+            <p className="font-bold text-sm text-slate-900 dark:text-white">
+              Send Assignment to Students
+            </p>
+            <p className="text-xs text-slate-500">
+              Post homework tasks in Text, Word (.docx), or PDF (.pdf) format
+            </p>
           </button>
 
           <button
@@ -125,8 +133,12 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
             className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-2 transition-all border border-slate-200 dark:border-slate-700"
           >
             <GraduationCap className="w-6 h-6 text-amber-500" />
-            <p className="font-bold text-sm text-slate-900 dark:text-white">Enroll & Manage Students</p>
-            <p className="text-xs text-slate-500">Add student profiles & passwords</p>
+            <p className="font-bold text-sm text-slate-900 dark:text-white">
+              Class Student Roster
+            </p>
+            <p className="text-xs text-slate-500">
+              View student profiles and guardian details for your classes
+            </p>
           </button>
 
           <button
@@ -143,7 +155,9 @@ export const TeacherDashboard: React.FC<{ teacher?: Teacher; onNavigate: (tab: s
             className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-2 transition-all border border-slate-200 dark:border-slate-700"
           >
             <Clock className="w-6 h-6 text-emerald-500" />
-            <p className="font-bold text-sm text-slate-900 dark:text-white">CBT Question Builder</p>
+            <p className="font-bold text-sm text-slate-900 dark:text-white">
+              CBT Question Builder
+            </p>
             <p className="text-xs text-slate-500">Create tests or import Excel</p>
           </button>
 

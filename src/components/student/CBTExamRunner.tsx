@@ -1,43 +1,48 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { CBTExam, Student } from '../../types';
-import { Clock, AlertTriangle, CheckCircle2, XCircle, Flag, ArrowLeft, ArrowRight, Award, ShieldCheck, Sparkles, LogOut } from 'lucide-react';
+import { CBTAttempt, CBTQuestionReview, CBTStartResponse, Student } from '../../types';
+import { Clock, AlertTriangle, CheckCircle2, Flag, ArrowLeft, ArrowRight, LogOut, RotateCcw } from 'lucide-react';
 
 interface CBTExamRunnerProps {
-  exam: CBTExam;
+  session: CBTStartResponse;
   student: Student;
   onFinish: () => void;
 }
 
-export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onFinish }) => {
-  const { submitCBTAttempt, logout } = useSchool();
+export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, onFinish }) => {
+  const { submitCBTExamSession, logout } = useSchool();
+  const exam = session.exam;
+
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, 'A' | 'B' | 'C' | 'D'>>({});
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({});
-  
-  // Timer state in seconds
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState(exam.durationMinutes * 60);
+
+  // Server-authoritative remaining seconds
+  const initialRemaining = Math.max(1, session.remainingSeconds || exam.durationMinutes * 60);
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState(initialRemaining);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [isExamCompleted, setIsExamCompleted] = useState(false);
   const [autoSubmittedDueToTime, setAutoSubmittedDueToTime] = useState(false);
-  const [finalScore, setFinalScore] = useState<any>(null);
+  const [finalAttempt, setFinalAttempt] = useState<CBTAttempt | null>(null);
+  const [submissionReview, setSubmissionReview] = useState<CBTQuestionReview[]>([]);
 
   const currentQ = exam.questions[currentQuestionIndex];
 
-  // Store refs to keep values fresh during interval callbacks
   const userAnswersRef = useRef(userAnswers);
   useEffect(() => {
     userAnswersRef.current = userAnswers;
   }, [userAnswers]);
 
-  const timeLeftRef = useRef(timeLeftSeconds);
-  useEffect(() => {
-    timeLeftRef.current = timeLeftSeconds;
-  }, [timeLeftSeconds]);
-
   const isExamCompletedRef = useRef(isExamCompleted);
   useEffect(() => {
     isExamCompletedRef.current = isExamCompleted;
   }, [isExamCompleted]);
+
+  const isSubmittingRef = useRef(isSubmitting);
+  useEffect(() => {
+    isSubmittingRef.current = isSubmitting;
+  }, [isSubmitting]);
 
   // Timer Countdown Effect
   useEffect(() => {
@@ -56,15 +61,40 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
     return () => clearInterval(timer);
   }, [isExamCompleted]);
 
+  const handleCompleteExam = async (isAutoSubmit = false) => {
+    if (isExamCompletedRef.current || isSubmittingRef.current) return;
+
+    setIsSubmitting(true);
+    isSubmittingRef.current = true;
+    setSubmitError(null);
+
+    try {
+      const response = await submitCBTExamSession(exam.id, userAnswersRef.current);
+      setFinalAttempt(response.attempt);
+      setSubmissionReview(response.review || []);
+      if (isAutoSubmit) {
+        setAutoSubmittedDueToTime(true);
+      }
+      setIsExamCompleted(true);
+    } catch (err: any) {
+      setSubmitError(
+        err?.message || 'Unable to submit exam answers to the server. Please retry.'
+      );
+    } finally {
+      setIsSubmitting(false);
+      isSubmittingRef.current = false;
+    }
+  };
+
   // Handle auto-completion when timer hits 0
   useEffect(() => {
-    if (timeLeftSeconds === 0 && !isExamCompleted) {
-      handleCompleteExam(true);
+    if (timeLeftSeconds === 0 && !isExamCompleted && !isSubmittingRef.current) {
+      void handleCompleteExam(true);
     }
   }, [timeLeftSeconds, isExamCompleted]);
 
   const handleSelectOption = (option: 'A' | 'B' | 'C' | 'D') => {
-    if (isExamCompleted) return;
+    if (isExamCompleted || isSubmitting || !currentQ) return;
     setUserAnswers((prev) => ({
       ...prev,
       [currentQ.id]: option,
@@ -76,44 +106,6 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
       ...prev,
       [questionId]: !prev[questionId],
     }));
-  };
-
-  const handleCompleteExam = (isAutoSubmit = false) => {
-    if (isExamCompletedRef.current) return;
-
-    const answersToGrade = userAnswersRef.current;
-    let obtainedMarks = 0;
-    exam.questions.forEach((q) => {
-      if (answersToGrade[q.id] === q.correctOption) {
-        obtainedMarks += q.marks;
-      }
-    });
-
-    const percentage = Math.round((obtainedMarks / exam.totalMarks) * 100);
-    const timeTaken = isAutoSubmit
-      ? exam.durationMinutes * 60
-      : exam.durationMinutes * 60 - timeLeftRef.current;
-
-    const resultData = {
-      examId: exam.id,
-      studentId: student.id,
-      studentName: `${student.firstName} ${student.lastName}`,
-      admissionNo: student.admissionNo,
-      scoreObtained: obtainedMarks,
-      totalMarks: exam.totalMarks,
-      percentage,
-      passed: percentage >= 50,
-      timeTakenSeconds: Math.max(1, timeTaken),
-      completedAt: new Date().toISOString(),
-      answers: answersToGrade,
-    };
-
-    submitCBTAttempt(resultData);
-    setFinalScore(resultData);
-    if (isAutoSubmit) {
-      setAutoSubmittedDueToTime(true);
-    }
-    setIsExamCompleted(true);
   };
 
   const formatTime = (totalSec: number) => {
@@ -150,16 +142,40 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
         )}
       </div>
 
+      {submitError && !isExamCompleted && (
+        <div className="max-w-6xl mx-auto bg-red-950/80 border border-red-700 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs text-red-200">
+          <div className="flex items-center gap-2 font-bold">
+            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <span>{submitError}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void handleCompleteExam(timeLeftSeconds === 0)}
+              disabled={isSubmitting}
+              className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl flex items-center gap-1"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Retry Submission
+            </button>
+            <button
+              onClick={onFinish}
+              className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl"
+            >
+              Exit to List
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Exam Interface or Result Review View */}
-      {isExamCompleted && finalScore ? (
-        /* Instant Grade Review Panel */
+      {isExamCompleted && finalAttempt ? (
+        /* Instant Server-Graded Review Panel */
         <div className="max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-8 animate-fade-in shadow-2xl">
           {autoSubmittedDueToTime && (
             <div className="bg-amber-950/80 border-2 border-amber-500/80 rounded-2xl p-5 flex items-center gap-4 text-amber-200 animate-pulse shadow-lg">
               <AlertTriangle className="w-8 h-8 text-amber-400 flex-shrink-0" />
               <div className="space-y-1">
                 <h4 className="font-bold text-sm text-amber-300 uppercase tracking-wider">
-                  ⚠️ Time Allocated Expired - Exam Auto-Submitted
+                  Time Allocated Expired - Exam Auto-Submitted
                 </h4>
                 <p className="text-xs text-amber-200/90 leading-relaxed">
                   Your allocated time for this CBT examination elapsed. All your answers were automatically evaluated, your score was recorded in official school records, and submitted for you.
@@ -175,53 +191,57 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
 
             <div>
               <span className="text-xs uppercase tracking-widest font-bold text-amber-400 bg-amber-400/10 px-3 py-1 rounded-full border border-amber-400/20">
-                ⚡ Automatic System Marked Score
+                Automatic System Marked Score
               </span>
               <h2 className="font-serif font-bold text-3xl text-white mt-2">
                 Exam Evaluation Completed
               </h2>
             </div>
 
-            <div className="flex justify-center items-center gap-6 pt-2">
+            <div className="flex justify-center items-center gap-6 pt-2 flex-wrap">
               <div>
                 <p className="text-xs text-slate-400 uppercase font-semibold">Automatic Score</p>
-                <p className="font-serif font-black text-4xl text-amber-400">{finalScore.scoreObtained} / {finalScore.totalMarks}</p>
+                <p className="font-serif font-black text-4xl text-amber-400">
+                  {finalAttempt.scoreObtained} / {finalAttempt.totalMarks}
+                </p>
               </div>
               <div className="h-10 w-px bg-slate-800" />
               <div>
                 <p className="text-xs text-slate-400 uppercase font-semibold">Percentage</p>
-                <p className="font-serif font-black text-4xl text-emerald-400">{finalScore.percentage}%</p>
+                <p className="font-serif font-black text-4xl text-emerald-400">{finalAttempt.percentage}%</p>
               </div>
               <div className="h-10 w-px bg-slate-800" />
               <div>
                 <p className="text-xs text-slate-400 uppercase font-semibold">Time Taken</p>
-                <p className="font-serif font-black text-2xl text-slate-300">{formatTime(finalScore.timeTakenSeconds)}</p>
+                <p className="font-serif font-black text-2xl text-slate-300">
+                  {formatTime(finalAttempt.timeTakenSeconds)}
+                </p>
               </div>
             </div>
           </div>
 
-          {/* Question-by-Question Detailed Review */}
+          {/* Question-by-Question Detailed Review from Server */}
           <div className="space-y-6">
             <h3 className="font-serif font-bold text-xl text-amber-400">Detailed Answer Review</h3>
-            {exam.questions.map((q, idx) => {
-              const selectedOpt = userAnswers[q.id];
-              const isCorrect = selectedOpt === q.correctOption;
+            {submissionReview.map((item, idx) => {
+              const selectedOpt = item.selectedOption;
+              const isCorrect = item.isCorrect;
 
               return (
                 <div
-                  key={q.id}
+                  key={item.questionId}
                   className={`p-6 rounded-2xl border space-y-3 ${
                     isCorrect ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-red-950/30 border-red-800/60'
                   }`}
                 >
                   <div className="flex justify-between items-start gap-4">
                     <span className="font-bold text-sm text-slate-200">
-                      Q{idx + 1}. {q.question}
+                      Q{idx + 1}. {item.question}
                     </span>
-                    <span className={`px-2.5 py-0.5 rounded text-xs font-bold ${
+                    <span className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
                       isCorrect ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'
                     }`}>
-                      {isCorrect ? `+${q.marks} Marks` : '0 Marks'}
+                      {isCorrect ? `+${item.earnedMarks} Marks` : `0 / ${item.marks} Marks`}
                     </span>
                   </div>
 
@@ -230,17 +250,23 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
                       <div
                         key={opt}
                         className={`p-2.5 rounded-xl border ${
-                          opt === q.correctOption
+                          opt === item.correctOption
                             ? 'bg-emerald-900/60 border-emerald-500 text-white font-bold'
                             : selectedOpt === opt
                             ? 'bg-red-900/60 border-red-500 text-white font-bold'
                             : 'bg-slate-800/50 border-slate-700 text-slate-400'
                         }`}
                       >
-                        {opt}. {q.options[opt]}
+                        {opt}. {item.options[opt]}
                       </div>
                     ))}
                   </div>
+
+                  {item.explanation && (
+                    <div className="p-3 bg-slate-800/70 border border-slate-700 rounded-xl text-xs text-amber-200">
+                      <strong className="text-amber-400">Explanation:</strong> {item.explanation}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -250,16 +276,36 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
             <p className="text-xs text-slate-400">
               Score automatically calculated and recorded in school records. Click below to exit and log out student session.
             </p>
-            <button
-              onClick={() => {
-                onFinish();
-                logout();
-              }}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3.5 rounded-xl text-sm transition-all flex items-center gap-2 mx-auto shadow-xl hover:scale-105"
-            >
-              <LogOut className="w-4 h-4" /> Confirm Marked Score & Log Out Student
-            </button>
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                onClick={onFinish}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-6 py-3.5 rounded-xl text-sm transition-all"
+              >
+                Back to CBT Portal
+              </button>
+              <button
+                onClick={() => {
+                  onFinish();
+                  void logout();
+                }}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3.5 rounded-xl text-sm transition-all flex items-center gap-2 shadow-xl hover:scale-105"
+              >
+                <LogOut className="w-4 h-4" /> Confirm Marked Score & Log Out Student
+              </button>
+            </div>
           </div>
+        </div>
+      ) : !currentQ ? (
+        <div className="max-w-2xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-4">
+          <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto" />
+          <h3 className="font-serif font-bold text-xl">No Questions Available</h3>
+          <p className="text-xs text-slate-400">This examination currently contains no published questions.</p>
+          <button
+            onClick={onFinish}
+            className="bg-amber-500 text-slate-950 font-bold px-6 py-2.5 rounded-xl text-xs"
+          >
+            Return to Exam List
+          </button>
         </div>
       ) : (
         /* Active CBT Examination Player Grid */
@@ -300,6 +346,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
                     <button
                       key={opt}
                       onClick={() => handleSelectOption(opt)}
+                      disabled={isSubmitting}
                       className={`w-full text-left p-4 rounded-2xl border text-sm font-medium transition-all flex items-center gap-3 ${
                         isSelected
                           ? 'border-amber-400 bg-amber-500/10 text-white font-bold ring-2 ring-amber-400/50'
@@ -321,7 +368,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
             {/* Navigation Buttons */}
             <div className="pt-6 border-t border-slate-800 flex items-center justify-between">
               <button
-                disabled={currentQuestionIndex === 0}
+                disabled={currentQuestionIndex === 0 || isSubmitting}
                 onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
                 className="px-5 py-2.5 rounded-xl bg-slate-800 text-white font-bold text-xs hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
@@ -330,6 +377,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
 
               {currentQuestionIndex < exam.questions.length - 1 ? (
                 <button
+                  disabled={isSubmitting}
                   onClick={() => setCurrentQuestionIndex((prev) => prev + 1)}
                   className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs flex items-center gap-2"
                 >
@@ -337,10 +385,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
                 </button>
               ) : (
                 <button
-                  onClick={() => handleCompleteExam(false)}
-                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg"
+                  disabled={isSubmitting}
+                  onClick={() => void handleCompleteExam(false)}
+                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 shadow-lg"
                 >
-                  Submit CBT Exam <CheckCircle2 className="w-4 h-4" />
+                  {isSubmitting ? 'Submitting & Grading...' : 'Submit CBT Exam'} <CheckCircle2 className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -393,10 +442,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ exam, student, onF
             </div>
 
             <button
-              onClick={() => handleCompleteExam(false)}
-              className="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 font-bold py-2.5 rounded-xl text-xs transition-colors"
+              disabled={isSubmitting}
+              onClick={() => void handleCompleteExam(false)}
+              className="w-full bg-red-900/60 hover:bg-red-800 disabled:opacity-50 text-red-200 border border-red-700 font-bold py-2.5 rounded-xl text-xs transition-colors"
             >
-              Finish & Submit Test
+              {isSubmitting ? 'Submitting...' : 'Finish & Submit Test'}
             </button>
           </div>
 

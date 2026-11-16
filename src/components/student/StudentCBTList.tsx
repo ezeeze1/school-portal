@@ -1,26 +1,41 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Student, CBTExam } from '../../types';
-import { Clock, Play, Award, CheckCircle2, AlertCircle, Calendar } from 'lucide-react';
+import { Student, CBTStartResponse } from '../../types';
+import { Clock, Play, CheckCircle2, AlertCircle, Calendar, Lock } from 'lucide-react';
 import { CBTExamRunner } from './CBTExamRunner';
 
 export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
-  const { cbtExams, cbtAttempts } = useSchool();
-  const [activeExam, setActiveExam] = useState<CBTExam | null>(null);
+  const { cbtExams, cbtAttempts, startCBTExamSession } = useSchool();
+  const [activeSession, setActiveSession] = useState<CBTStartResponse | null>(null);
+  const [startingExamId, setStartingExamId] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Available CBT exams for this student's class
   const classExams = cbtExams.filter(
     (e) => e.isPublished && (e.classId === student.classId || e.className.includes(student.className))
   );
 
+  const handleStartExam = async (examId: string) => {
+    setStartError(null);
+    setStartingExamId(examId);
+    try {
+      const session = await startCBTExamSession(examId);
+      setActiveSession(session);
+    } catch (err: any) {
+      setStartError(err?.message || 'Unable to start CBT examination. Please check with your teacher.');
+    } finally {
+      setStartingExamId(null);
+    }
+  };
+
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
       
-      {activeExam ? (
+      {activeSession ? (
         <CBTExamRunner
-          exam={activeExam}
+          session={activeSession}
           student={student}
-          onFinish={() => setActiveExam(null)}
+          onFinish={() => setActiveSession(null)}
         />
       ) : (
         <div className="space-y-6">
@@ -39,6 +54,13 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
             </div>
           </div>
 
+          {startError && (
+            <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-2xl text-xs font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{startError}</span>
+            </div>
+          )}
+
           {/* Active Exams Grid */}
           <div className="space-y-4">
             <h3 className="font-bold text-sm text-slate-700 dark:text-slate-300 uppercase tracking-wider">
@@ -51,6 +73,11 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                   const pastAttempt = cbtAttempts.find(
                     (a) => a.examId === exam.id && a.studentId === student.id
                   );
+                  const isCompleted = Boolean(pastAttempt || exam.hasAttempt || exam.sessionStatus === 'submitted');
+                  const isExpired = exam.sessionStatus === 'expired' && !isCompleted;
+                  const isInProgress = exam.sessionStatus === 'in_progress' && !isCompleted;
+                  const isLocked = exam.cbtActive === false;
+                  const isStarting = startingExamId === exam.id;
 
                   return (
                     <div
@@ -80,23 +107,41 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                       </div>
 
                       <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                        {pastAttempt ? (
+                        {isCompleted ? (
                           <div className="flex items-center justify-between w-full text-xs">
                             <span className={`font-bold px-2.5 py-1 rounded-full ${
-                              pastAttempt.passed ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                              pastAttempt
+                                ? pastAttempt.passed
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                                : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                             }`}>
-                              Completed: {pastAttempt.percentage}%
+                              {pastAttempt ? `Completed: ${pastAttempt.percentage}%` : 'Exam Completed'}
                             </span>
                             <span className="text-slate-400 dark:text-slate-500 font-semibold italic flex items-center gap-1">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Submitted
                             </span>
                           </div>
+                        ) : isExpired ? (
+                          <div className="w-full bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 border border-red-200 dark:border-red-900">
+                            <AlertCircle className="w-4 h-4" /> Session Time Expired
+                          </div>
+                        ) : isLocked ? (
+                          <div className="w-full bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2">
+                            <Lock className="w-4 h-4" /> CBT Portal Currently Locked
+                          </div>
                         ) : (
                           <button
-                            onClick={() => setActiveExam(exam)}
-                            className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 dark:text-slate-950 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
+                            onClick={() => void handleStartExam(exam.id)}
+                            disabled={isStarting || startingExamId !== null}
+                            className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 dark:bg-amber-500 dark:hover:bg-amber-600 dark:text-slate-950 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors"
                           >
-                            <Play className="w-4 h-4" /> Start CBT Exam Now
+                            <Play className="w-4 h-4" />
+                            {isStarting
+                              ? 'Starting Exam Session...'
+                              : isInProgress
+                              ? 'Resume CBT Exam'
+                              : 'Start CBT Exam Now'}
                           </button>
                         )}
                       </div>

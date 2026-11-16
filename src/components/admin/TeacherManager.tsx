@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Teacher } from '../../types';
-import { Plus, Trash2, Edit, Lock, Check, X, BookOpen, GraduationCap } from 'lucide-react';
+import { Plus, Trash2, Edit, ShieldCheck, BookOpen, GraduationCap } from 'lucide-react';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import { MarkDropdownSelect } from '../common/MarkDropdownSelect';
 
@@ -35,28 +35,25 @@ export const TeacherManager: React.FC = () => {
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [teacherToDelete, setTeacherToDelete] = useState<Teacher | null>(null);
 
-  // Form state for adding educator
+  // Form state for adding educator (portal passwords managed via Supabase Auth)
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
-    password: 'teacherpass123',
   });
 
   const [selectedClasses, setSelectedClasses] = useState<string[]>(['SS 2 Gold']);
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['Mathematics', 'Further Mathematics']);
-  const [customClassInput, setCustomClassInput] = useState('');
-  const [customSubjectInput, setCustomSubjectInput] = useState('');
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([
+    'Mathematics',
+    'Further Mathematics',
+  ]);
 
   // Edit Teacher Form State
   const [editFormData, setEditFormData] = useState<Partial<Teacher>>({});
   const [editSelectedClasses, setEditSelectedClasses] = useState<string[]>([]);
   const [editSelectedSubjects, setEditSelectedSubjects] = useState<string[]>([]);
-  const [editCustomClassInput, setEditCustomClassInput] = useState('');
-  const [editCustomSubjectInput, setEditCustomSubjectInput] = useState('');
 
-  // Add modal toggle handlers
   const toggleClass = (cls: string) => {
     setSelectedClasses((prev) =>
       prev.includes(cls) ? prev.filter((c) => c !== cls) : [...prev, cls]
@@ -69,23 +66,6 @@ export const TeacherManager: React.FC = () => {
     );
   };
 
-  const handleAddCustomClass = () => {
-    const trimmed = customClassInput.trim();
-    if (trimmed && !selectedClasses.includes(trimmed)) {
-      setSelectedClasses((prev) => [...prev, trimmed]);
-      setCustomClassInput('');
-    }
-  };
-
-  const handleAddCustomSubject = () => {
-    const trimmed = customSubjectInput.trim();
-    if (trimmed && !selectedSubjects.includes(trimmed)) {
-      setSelectedSubjects((prev) => [...prev, trimmed]);
-      setCustomSubjectInput('');
-    }
-  };
-
-  // Edit modal toggle handlers
   const toggleEditClass = (cls: string) => {
     setEditSelectedClasses((prev) =>
       prev.includes(cls) ? prev.filter((c) => c !== cls) : [...prev, cls]
@@ -96,22 +76,6 @@ export const TeacherManager: React.FC = () => {
     setEditSelectedSubjects((prev) =>
       prev.includes(subj) ? prev.filter((s) => s !== subj) : [...prev, subj]
     );
-  };
-
-  const handleEditAddCustomClass = () => {
-    const trimmed = editCustomClassInput.trim();
-    if (trimmed && !editSelectedClasses.includes(trimmed)) {
-      setEditSelectedClasses((prev) => [...prev, trimmed]);
-      setEditCustomClassInput('');
-    }
-  };
-
-  const handleEditAddCustomSubject = () => {
-    const trimmed = editCustomSubjectInput.trim();
-    if (trimmed && !editSelectedSubjects.includes(trimmed)) {
-      setEditSelectedSubjects((prev) => [...prev, trimmed]);
-      setEditCustomSubjectInput('');
-    }
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
@@ -151,20 +115,18 @@ export const TeacherManager: React.FC = () => {
       formClassName: primaryClass,
       classTaught: joinedClasses,
       classesTaught: selectedClasses,
-      password: formData.password.trim() || 'teacherpass123',
       status: 'Active',
-      avatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=300&q=80',
+      avatar:
+        'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=300&q=80',
     };
 
     addTeacher(newTch);
     setShowAddModal(false);
-    // Reset form
     setFormData({
       firstName: '',
       lastName: '',
       email: '',
       phone: '',
-      password: 'teacherpass123',
     });
     setSelectedClasses(['SS 2 Gold']);
     setSelectedSubjects(['Mathematics', 'Further Mathematics']);
@@ -174,13 +136,16 @@ export const TeacherManager: React.FC = () => {
     setEditingTeacher(teacher);
     setEditFormData({ ...teacher });
 
-    const existingClasses = teacher.classesTaught || 
+    const existingClasses =
+      teacher.classesTaught ||
       (teacher.classTaught ? teacher.classTaught.split(',').map((s) => s.trim()) : []);
     setEditSelectedClasses(existingClasses.length > 0 ? existingClasses : ['SS 2 Gold']);
 
     const existingSubjects = Array.isArray(teacher.subjectsTaught)
       ? teacher.subjectsTaught
-      : (teacher.subjectsTaught ? (teacher.subjectsTaught as unknown as string).split(',').map((s) => s.trim()) : []);
+      : teacher.subjectsTaught
+      ? (teacher.subjectsTaught as unknown as string).split(',').map((s) => s.trim())
+      : [];
     setEditSelectedSubjects(existingSubjects);
   };
 
@@ -226,7 +191,8 @@ export const TeacherManager: React.FC = () => {
             Teaching Faculty & Staff Roster
           </h2>
           <p className="text-xs text-slate-500">
-            Manage academic staff accounts, assign multiple classes taught, subjects, and portal login credentials.
+            Manage academic staff profiles, assign classes taught, subjects, and official login
+            emails for Supabase Auth linking.
           </p>
         </div>
 
@@ -241,7 +207,9 @@ export const TeacherManager: React.FC = () => {
       {/* Educator Profiles Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {teachers.map((teacher) => {
-          const teacherClasses = teacher.classesTaught || (teacher.classTaught ? teacher.classTaught.split(',').map((s) => s.trim()) : []);
+          const teacherClasses =
+            teacher.classesTaught ||
+            (teacher.classTaught ? teacher.classTaught.split(',').map((s) => s.trim()) : []);
           return (
             <div
               key={teacher.id}
@@ -312,16 +280,16 @@ export const TeacherManager: React.FC = () => {
                   </div>
 
                   <p className="pt-1">
-                    <strong className="text-slate-700 dark:text-slate-300">Email:</strong> {teacher.email}
+                    <strong className="text-slate-700 dark:text-slate-300">Email:</strong>{' '}
+                    {teacher.email}
                   </p>
                   <p>
-                    <strong className="text-slate-700 dark:text-slate-300">Phone:</strong> {teacher.phone || 'N/A'}
+                    <strong className="text-slate-700 dark:text-slate-300">Phone:</strong>{' '}
+                    {teacher.phone || 'N/A'}
                   </p>
-                  {teacher.password && (
-                    <p className="text-[11px] text-slate-500 flex items-center gap-1 font-mono">
-                      <Lock className="w-3 h-3 text-amber-500" /> Password assigned
-                    </p>
-                  )}
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium">
+                    <ShieldCheck className="w-3.5 h-3.5" /> Auth linked by official email
+                  </p>
                 </div>
               </div>
 
@@ -353,9 +321,11 @@ export const TeacherManager: React.FC = () => {
             onSubmit={handleAddSubmit}
             className="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-xl w-full space-y-4 shadow-2xl text-xs my-8"
           >
-            <h3 className="font-serif font-bold text-xl text-slate-900 dark:text-white">Register New Educator</h3>
+            <h3 className="font-serif font-bold text-xl text-slate-900 dark:text-white">
+              Register New Educator
+            </h3>
             <p className="text-xs text-slate-500">
-              Assign single or multiple classes and subjects for this educator.
+              Assign classes, subjects, and the educator's official email for Supabase Auth login.
             </p>
 
             <div className="grid grid-cols-2 gap-3">
@@ -410,7 +380,6 @@ export const TeacherManager: React.FC = () => {
               </div>
             </div>
 
-            {/* Mark and Dropdown Select: Classes Taught */}
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
               <MarkDropdownSelect
                 label="Select Classes Taught"
@@ -428,7 +397,6 @@ export const TeacherManager: React.FC = () => {
               />
             </div>
 
-            {/* Mark and Dropdown Select: Subjects Taught */}
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
               <MarkDropdownSelect
                 label="Select Subjects Taught"
@@ -446,19 +414,12 @@ export const TeacherManager: React.FC = () => {
               />
             </div>
 
-            {/* Assign Password Input */}
-            <div className="bg-amber-50 dark:bg-amber-950/40 p-3 rounded-2xl border border-amber-200 dark:border-amber-800/50">
-              <label className="block font-bold text-amber-900 dark:text-amber-300 mb-1 flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-amber-600" /> Assign Portal Login Password *
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl font-mono text-xs text-amber-900 dark:text-amber-200"
-                placeholder="Assign password..."
-              />
+            <div className="bg-amber-50 dark:bg-amber-950/40 p-3 rounded-2xl border border-amber-200 dark:border-amber-800/50 flex items-center gap-2 text-[11px] text-amber-900 dark:text-amber-200">
+              <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                Teachers sign in via Supabase Authentication using their official email address
+                (no plaintext passwords are stored in the portal).
+              </span>
             </div>
 
             <div className="pt-4 flex justify-between">
@@ -491,7 +452,9 @@ export const TeacherManager: React.FC = () => {
               <h3 className="font-serif font-bold text-xl text-slate-900 dark:text-white flex items-center gap-2">
                 <Edit className="w-5 h-5 text-amber-500" /> Edit Staff Profile
               </h3>
-              <span className="font-mono text-xs font-bold text-amber-600">{editingTeacher.staffId}</span>
+              <span className="font-mono text-xs font-bold text-amber-600">
+                {editingTeacher.staffId}
+              </span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -542,7 +505,6 @@ export const TeacherManager: React.FC = () => {
               </div>
             </div>
 
-            {/* Edit Mark and Dropdown Select: Classes Taught */}
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
               <MarkDropdownSelect
                 label="Classes Taught"
@@ -560,7 +522,6 @@ export const TeacherManager: React.FC = () => {
               />
             </div>
 
-            {/* Edit Mark and Dropdown Select: Subjects Taught */}
             <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
               <MarkDropdownSelect
                 label="Subjects Taught"
@@ -575,20 +536,6 @@ export const TeacherManager: React.FC = () => {
                 }}
                 placeholder="Click to select and mark subjects taught..."
                 badgeTheme="blue"
-              />
-            </div>
-
-            {/* Assign/Update Password */}
-            <div className="bg-amber-50 dark:bg-amber-950/40 p-3 rounded-2xl border border-amber-200 dark:border-amber-800/50">
-              <label className="block font-bold text-amber-900 dark:text-amber-300 mb-1 flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-amber-600" /> Assign / Update Password
-              </label>
-              <input
-                type="text"
-                value={editFormData.password || ''}
-                onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })}
-                className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl font-mono text-xs text-amber-900 dark:text-amber-200"
-                placeholder="Enter password..."
               />
             </div>
 
@@ -623,7 +570,11 @@ export const TeacherManager: React.FC = () => {
         }}
         title="Confirm Educator Profile Deletion"
         message="Are you sure you want to delete this teacher profile from the school portal?"
-        itemName={teacherToDelete ? `${teacherToDelete.firstName} ${teacherToDelete.lastName} (${teacherToDelete.staffId})` : undefined}
+        itemName={
+          teacherToDelete
+            ? `${teacherToDelete.firstName} ${teacherToDelete.lastName} (${teacherToDelete.staffId})`
+            : undefined
+        }
       />
     </div>
   );

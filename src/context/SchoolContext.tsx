@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   User,
   UserRole,
@@ -12,7 +12,10 @@ import {
   AttendanceRecord,
   CBTExam,
   CBTAttempt,
+  CBTStartResponse,
+  CBTSubmissionResponse,
   Assignment,
+  AssignmentSubmission,
   StudyNote,
   NewsItem,
   GalleryImage,
@@ -21,12 +24,11 @@ import {
   AnnouncementNotification,
   FeeRecord,
   SystemSessionTerm,
-  AdminCredentials
+  AdminCredentials,
 } from '../types';
 
 import {
   initialSystemSettings,
-  sampleUsers,
   sampleClasses,
   sampleSubjects,
   sampleTeachers,
@@ -44,18 +46,30 @@ import {
   sampleApplications,
   sampleDownloads,
   sampleAnnouncements,
-  sampleFeeRecords
+  sampleFeeRecords,
 } from '../data/initialData';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseSchoolService } from '../services/supabaseSchoolService';
 
 interface SchoolContextType {
   // Auth & Session State
   currentUser: User | null;
   activeRole: UserRole;
+  authLoading: boolean;
+  authRecoveryMode: boolean;
+  dismissAuthRecovery: () => void;
   setCurrentUser: (user: User | null) => void;
   switchRole: (role: UserRole, userObj?: User | null) => void;
-  logout: () => void;
+  signInWithPassword: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  sendPasswordResetEmail: (email: string) => Promise<{ ok: boolean; error?: string }>;
+  updatePassword: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+  updateAdminAuthProfile: (updates: {
+    name?: string;
+    email?: string;
+    password?: string;
+    username?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  logout: () => Promise<void>;
 
   // Active View Navigation
   currentView: string;
@@ -82,6 +96,7 @@ interface SchoolContextType {
   cbtExams: CBTExam[];
   cbtAttempts: CBTAttempt[];
   assignments: Assignment[];
+  assignmentSubmissions: AssignmentSubmission[];
   studyNotes: StudyNote[];
   newsItems: NewsItem[];
   galleryImages: GalleryImage[];
@@ -96,6 +111,7 @@ interface SchoolContextType {
   deleteStudent: (id: string) => void;
   generateResultPasscodeForStudent: (studentId: string) => string;
   bulkGenerateResultPasscodes: () => void;
+  verifyResultPasscode: (studentId: string, passcode: string) => Promise<boolean>;
 
   // Teacher CRUD
   addTeacher: (teacher: Omit<Teacher, 'id'>) => void;
@@ -118,18 +134,33 @@ interface SchoolContextType {
   // Attendance
   recordAttendance: (records: Omit<AttendanceRecord, 'id'>[]) => void;
 
-  // CBT Exam
+  // CBT Exam & Server-Side Engine
   createCBTExam: (exam: Omit<CBTExam, 'id'>) => void;
   updateCBTExam: (id: string, exam: Partial<CBTExam>) => void;
   deleteCBTExam: (id: string) => void;
   deleteMultipleCBTExams: (ids: string[]) => void;
   submitCBTAttempt: (attempt: Omit<CBTAttempt, 'id'>) => void;
   deleteCBTAttempt: (id: string) => void;
+  startCBTExamSession: (examId: string) => Promise<CBTStartResponse>;
+  submitCBTExamSession: (
+    examId: string,
+    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+  ) => Promise<CBTSubmissionResponse>;
 
-  // Assignments & Notes
+  // Assignments, Submissions & Notes
   createAssignment: (asg: Omit<Assignment, 'id'>) => void;
   addAssignment: (asg: Omit<Assignment, 'id'>) => void;
   deleteAssignment: (id: string) => void;
+  submitAssignmentAnswer: (
+    assignmentId: string,
+    content: string,
+    fileUrl?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  gradeAssignmentSubmission: (
+    submissionId: string,
+    grade: number | undefined,
+    feedback: string | undefined
+  ) => Promise<{ ok: boolean; error?: string }>;
   createStudyNote: (note: Omit<StudyNote, 'id'>) => void;
   addStudyNote: (note: Omit<StudyNote, 'id'>) => void;
   deleteStudyNote: (id: string) => void;
@@ -140,8 +171,14 @@ interface SchoolContextType {
   addDownloadDocument: (doc: Omit<DownloadDocument, 'id'>) => void;
 
   // Applications
-  submitOnlineApplication: (app: Omit<OnlineApplication, 'id' | 'applicationNumber' | 'submissionDate' | 'status'>) => string;
-  updateApplicationStatus: (id: string, status: OnlineApplication['status'], notes?: string) => void;
+  submitOnlineApplication: (
+    app: Omit<OnlineApplication, 'id' | 'applicationNumber' | 'submissionDate' | 'status'>
+  ) => string;
+  updateApplicationStatus: (
+    id: string,
+    status: OnlineApplication['status'],
+    notes?: string
+  ) => void;
 
   // Announcements
   sendAnnouncement: (ann: Omit<AnnouncementNotification, 'id' | 'date'>) => void;
@@ -159,160 +196,224 @@ const SchoolContext = createContext<SchoolContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_KEY = 'divine_academy_school_db_v2';
 
+const PRIVATE_STORAGE_SUFFIXES = [
+  'current_user',
+  'active_role',
+  'admin_creds',
+  'students',
+  'teachers',
+  'parents',
+  'classes',
+  'subjects',
+  'scores',
+  'results',
+  'attendance',
+  'cbtExams',
+  'cbtAttempts',
+  'assignments',
+  'assignmentSubmissions',
+  'notes',
+  'apps',
+  'fees',
+];
+
 const initialAdminCredentials: AdminCredentials = {
   username: 'admin',
   email: 'ezekielsamson1@gmail.com',
-  password: 'sezuo2020',
   name: 'System Administrator',
 };
 
+const purgeSensitiveLocalStorage = () => {
+  try {
+    PRIVATE_STORAGE_SUFFIXES.forEach((suffix) => {
+      localStorage.removeItem(`${LOCAL_STORAGE_KEY}_${suffix}`);
+    });
+  } catch {
+    // Ignore storage access failures in restricted frames
+  }
+};
+
 export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
-      const parsed = saved ? (JSON.parse(saved) as User | null) : null;
-      return parsed && parsed.id && parsed.role ? parsed : null;
-    } catch {
-      return null;
-    }
-  });
-  const [activeRole, setActiveRole] = useState<UserRole>(() => {
-    try {
-      const savedRole = localStorage.getItem(`${LOCAL_STORAGE_KEY}_active_role`);
-      const savedUser = localStorage.getItem(`${LOCAL_STORAGE_KEY}_current_user`);
-      const parsedRole: UserRole = savedRole ? JSON.parse(savedRole) : 'public';
-      const parsedUser: User | null = savedUser ? JSON.parse(savedUser) : null;
-      // Do not trust activeRole in localStorage unless a matching user session exists
-      if (parsedRole !== 'public' && (!parsedUser || parsedUser.role !== parsedRole)) {
-        return 'public';
-      }
-      return parsedRole;
-    } catch {
-      return 'public';
-    }
-  });
+  // Never trust role or user session from localStorage
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [activeRole, setActiveRole] = useState<UserRole>('public');
+  const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured);
+  const [authRecoveryMode, setAuthRecoveryMode] = useState<boolean>(false);
   const [currentView, setCurrentView] = useState<string>('home');
 
-  // Admin Credentials State
-  const [adminCredentials, setAdminCredentials] = useState<AdminCredentials>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_admin_creds`);
-    return saved ? JSON.parse(saved) : initialAdminCredentials;
-  });
+  const [adminCredentials, setAdminCredentials] = useState<AdminCredentials>(initialAdminCredentials);
 
-  // Load state from local storage or initial mock data
+  // Public site settings & public content
   const [systemSettings, setSystemSettings] = useState<SystemSessionTerm>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_settings`);
-    if (saved) {
-      try {
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_settings`);
+      if (saved) {
         const parsed = JSON.parse(saved);
-        if (!parsed.academicSessions || !Array.isArray(parsed.academicSessions) || parsed.academicSessions.length === 0) {
+        if (
+          !parsed.academicSessions ||
+          !Array.isArray(parsed.academicSessions) ||
+          parsed.academicSessions.length === 0
+        ) {
           parsed.academicSessions = ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
         }
         return parsed;
-      } catch (e) {
-        return initialSystemSettings;
       }
+    } catch {
+      // ignore
     }
     return initialSystemSettings;
   });
 
-  const [students, setStudents] = useState<Student[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_students`);
-    return saved ? JSON.parse(saved) : sampleStudents;
-  });
+  // Private academic & PII collections start empty when Supabase is configured
+  const [students, setStudents] = useState<Student[]>(() =>
+    isSupabaseConfigured ? [] : sampleStudents
+  );
+  const [teachers, setTeachers] = useState<Teacher[]>(() =>
+    isSupabaseConfigured ? [] : sampleTeachers
+  );
+  const [parents, setParents] = useState<Parent[]>(() =>
+    isSupabaseConfigured ? [] : sampleParents
+  );
+  const [classes, setClasses] = useState<SchoolClass[]>(() =>
+    isSupabaseConfigured ? [] : sampleClasses
+  );
+  const [subjects, setSubjects] = useState<Subject[]>(() =>
+    isSupabaseConfigured ? [] : sampleSubjects
+  );
+  const [scores, setScores] = useState<ScoreRecord[]>(() =>
+    isSupabaseConfigured ? [] : sampleScores
+  );
+  const [results, setResults] = useState<TerminalResult[]>(() =>
+    isSupabaseConfigured ? [] : sampleTerminalResults
+  );
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() =>
+    isSupabaseConfigured ? [] : sampleAttendance
+  );
+  const [cbtExams, setCbtExams] = useState<CBTExam[]>(() =>
+    isSupabaseConfigured ? [] : sampleCBTExams
+  );
+  const [cbtAttempts, setCbtAttempts] = useState<CBTAttempt[]>(() =>
+    isSupabaseConfigured ? [] : sampleCBTAttempts
+  );
+  const [assignments, setAssignments] = useState<Assignment[]>(() =>
+    isSupabaseConfigured ? [] : sampleAssignments
+  );
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState<AssignmentSubmission[]>([]);
+  const [studyNotes, setStudyNotes] = useState<StudyNote[]>(() =>
+    isSupabaseConfigured ? [] : sampleNotes
+  );
+  const [applications, setApplications] = useState<OnlineApplication[]>(() =>
+    isSupabaseConfigured ? [] : sampleApplications
+  );
+  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() =>
+    isSupabaseConfigured ? [] : sampleFeeRecords
+  );
 
-  const [teachers, setTeachers] = useState<Teacher[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_teachers`);
-    return saved ? JSON.parse(saved) : sampleTeachers;
-  });
-
-  const [parents, setParents] = useState<Parent[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_parents`);
-    return saved ? JSON.parse(saved) : sampleParents;
-  });
-
-  const [classes, setClasses] = useState<SchoolClass[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_classes`);
-    return saved ? JSON.parse(saved) : sampleClasses;
-  });
-
-  const [subjects, setSubjects] = useState<Subject[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_subjects`);
-    return saved ? JSON.parse(saved) : sampleSubjects;
-  });
-
-  const [scores, setScores] = useState<ScoreRecord[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_scores`);
-    return saved ? JSON.parse(saved) : sampleScores;
-  });
-
-  const [results, setResults] = useState<TerminalResult[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_results`);
-    return saved ? JSON.parse(saved) : sampleTerminalResults;
-  });
-
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_attendance`);
-    return saved ? JSON.parse(saved) : sampleAttendance;
-  });
-
-  const [cbtExams, setCbtExams] = useState<CBTExam[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_cbtExams`);
-    return saved ? JSON.parse(saved) : sampleCBTExams;
-  });
-
-  const [cbtAttempts, setCbtAttempts] = useState<CBTAttempt[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_cbtAttempts`);
-    return saved ? JSON.parse(saved) : sampleCBTAttempts;
-  });
-
-  const [assignments, setAssignments] = useState<Assignment[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_assignments`);
-    return saved ? JSON.parse(saved) : sampleAssignments;
-  });
-
-  const [studyNotes, setStudyNotes] = useState<StudyNote[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_notes`);
-    return saved ? JSON.parse(saved) : sampleNotes;
-  });
-
+  // Public content collections
   const [newsItems, setNewsItems] = useState<NewsItem[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_news`);
-    return saved ? JSON.parse(saved) : sampleNews;
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_news`);
+      return saved ? JSON.parse(saved) : sampleNews;
+    } catch {
+      return sampleNews;
+    }
   });
-
   const [galleryImages, setGalleryImages] = useState<GalleryImage[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_gallery`);
-    return saved ? JSON.parse(saved) : sampleGallery;
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_gallery`);
+      return saved ? JSON.parse(saved) : sampleGallery;
+    } catch {
+      return sampleGallery;
+    }
   });
-
-  const [applications, setApplications] = useState<OnlineApplication[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_apps`);
-    return saved ? JSON.parse(saved) : sampleApplications;
-  });
-
   const [downloads, setDownloads] = useState<DownloadDocument[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_downloads`);
-    return saved ? JSON.parse(saved) : sampleDownloads;
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_downloads`);
+      return saved ? JSON.parse(saved) : sampleDownloads;
+    } catch {
+      return sampleDownloads;
+    }
   });
-
   const [announcements, setAnnouncements] = useState<AnnouncementNotification[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_announcements`);
-    return saved ? JSON.parse(saved) : sampleAnnouncements;
+    try {
+      const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_announcements`);
+      return saved ? JSON.parse(saved) : sampleAnnouncements;
+    } catch {
+      return sampleAnnouncements;
+    }
   });
 
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(() => {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY}_fees`);
-    return saved ? JSON.parse(saved) : sampleFeeRecords;
-  });
+  const authSequenceRef = useRef(0);
 
-  // Hydrate existing data from Supabase if configured (non-destructive: never overwrites with sample data)
-  useEffect(() => {
+  const clearPrivateCollections = useCallback(() => {
     if (!isSupabaseConfigured) return;
+    setStudents([]);
+    setTeachers([]);
+    setParents([]);
+    setClasses([]);
+    setSubjects([]);
+    setScores([]);
+    setResults([]);
+    setAttendance([]);
+    setCbtExams([]);
+    setCbtAttempts([]);
+    setAssignments([]);
+    setAssignmentSubmissions([]);
+    setStudyNotes([]);
+    setApplications([]);
+    setFeeRecords([]);
+  }, []);
 
-    let isMounted = true;
-    supabaseSchoolService.fetchPortalSnapshot().then((snapshot) => {
-      if (!isMounted) return;
+  const applyPublicSnapshot = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    const snapshot = await supabaseSchoolService.fetchPublicSnapshot();
+    if (snapshot.systemSettings) {
+      setSystemSettings((prev) => ({
+        ...prev,
+        ...snapshot.systemSettings,
+        academicSessions:
+          snapshot.systemSettings?.academicSessions &&
+          snapshot.systemSettings.academicSessions.length > 0
+            ? snapshot.systemSettings.academicSessions
+            : prev.academicSessions,
+      }));
+    }
+    if (snapshot.newsItems) setNewsItems(snapshot.newsItems);
+    if (snapshot.galleryImages) setGalleryImages(snapshot.galleryImages);
+    if (snapshot.downloads) setDownloads(snapshot.downloads);
+    if (snapshot.announcements) setAnnouncements(snapshot.announcements);
+  }, []);
+
+  const hydrateAuthenticatedSession = useCallback(
+    async (
+      authUser: { id: string; email?: string; user_metadata?: Record<string, any> },
+      options?: { navigateToPortal?: boolean }
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const seq = ++authSequenceRef.current;
+
+      const { profile, error } = await supabaseSchoolService.syncMyUserProfile();
+      if (seq !== authSequenceRef.current) {
+        return { ok: false, error: 'Session superseded.' };
+      }
+
+      if (!profile || !profile.isActive) {
+        clearPrivateCollections();
+        setCurrentUser(null);
+        setActiveRole('public');
+        await applyPublicSnapshot();
+        return {
+          ok: false,
+          error:
+            error ||
+            'Your Supabase login succeeded, but no active school portal profile is linked to this account yet. Please contact the school administrator.',
+        };
+      }
+
+      const snapshot = await supabaseSchoolService.fetchPortalSnapshot(profile.role);
+      if (seq !== authSequenceRef.current) {
+        return { ok: false, error: 'Session superseded.' };
+      }
+
       if (snapshot.systemSettings) {
         setSystemSettings((prev) => ({
           ...prev,
@@ -324,142 +425,374 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               : prev.academicSessions,
         }));
       }
-      if (snapshot.students) setStudents(snapshot.students);
-      if (snapshot.teachers) setTeachers(snapshot.teachers);
-      if (snapshot.parents) setParents(snapshot.parents);
-      if (snapshot.classes) setClasses(snapshot.classes);
-      if (snapshot.subjects) setSubjects(snapshot.subjects);
-      if (snapshot.scores) setScores(snapshot.scores);
-      if (snapshot.results) setResults(snapshot.results);
-      if (snapshot.attendance) setAttendance(snapshot.attendance);
-      if (snapshot.cbtExams) setCbtExams(snapshot.cbtExams);
-      if (snapshot.cbtAttempts) setCbtAttempts(snapshot.cbtAttempts);
-      if (snapshot.assignments) setAssignments(snapshot.assignments);
-      if (snapshot.studyNotes) setStudyNotes(snapshot.studyNotes);
+
+      const loadedStudents = snapshot.students ?? [];
+      const loadedTeachers = snapshot.teachers ?? [];
+      const loadedParents = snapshot.parents ?? [];
+
+      setStudents(loadedStudents);
+      setTeachers(loadedTeachers);
+      setParents(loadedParents);
+      setClasses(snapshot.classes ?? []);
+      setSubjects(snapshot.subjects ?? []);
+      setScores(snapshot.scores ?? []);
+      setResults(snapshot.results ?? []);
+      setAttendance(snapshot.attendance ?? []);
+      setCbtExams(snapshot.cbtExams ?? []);
+      setCbtAttempts(snapshot.cbtAttempts ?? []);
+      setAssignments(snapshot.assignments ?? []);
+      setAssignmentSubmissions(snapshot.assignmentSubmissions ?? []);
+      setStudyNotes(snapshot.studyNotes ?? []);
+      setApplications(snapshot.applications ?? []);
+      setFeeRecords(snapshot.feeRecords ?? []);
+
       if (snapshot.newsItems) setNewsItems(snapshot.newsItems);
       if (snapshot.galleryImages) setGalleryImages(snapshot.galleryImages);
-      if (snapshot.applications) setApplications(snapshot.applications);
       if (snapshot.downloads) setDownloads(snapshot.downloads);
       if (snapshot.announcements) setAnnouncements(snapshot.announcements);
-      if (snapshot.feeRecords) setFeeRecords(snapshot.feeRecords);
+
+      let resolvedUser: User;
+      const email = profile.email || authUser.email || '';
+
+      if (profile.role === 'teacher') {
+        const matched = loadedTeachers.find(
+          (t) =>
+            t.authUserId === authUser.id ||
+            (profile.referenceId && t.id === profile.referenceId) ||
+            t.email.toLowerCase() === email.toLowerCase()
+        );
+        resolvedUser = {
+          id: matched?.id || profile.referenceId || authUser.id,
+          authUserId: authUser.id,
+          name: matched
+            ? `${matched.firstName} ${matched.lastName}`
+            : profile.fullName || authUser.user_metadata?.full_name || 'Faculty Member',
+          email,
+          role: 'teacher',
+          avatar: matched?.avatar,
+          referenceId: matched?.staffId || profile.referenceId,
+        };
+      } else if (profile.role === 'student') {
+        const matched = loadedStudents.find(
+          (s) =>
+            s.authUserId === authUser.id ||
+            (profile.referenceId && s.id === profile.referenceId) ||
+            (s.email && s.email.toLowerCase() === email.toLowerCase())
+        );
+        resolvedUser = {
+          id: matched?.id || profile.referenceId || authUser.id,
+          authUserId: authUser.id,
+          name: matched
+            ? `${matched.firstName} ${matched.lastName}`
+            : profile.fullName || authUser.user_metadata?.full_name || 'Student',
+          email,
+          role: 'student',
+          avatar: matched?.avatar,
+          referenceId: matched?.admissionNo || profile.referenceId,
+        };
+      } else if (profile.role === 'parent') {
+        const matched = loadedParents.find(
+          (p) =>
+            p.authUserId === authUser.id ||
+            (profile.referenceId && p.id === profile.referenceId) ||
+            p.email.toLowerCase() === email.toLowerCase()
+        );
+        resolvedUser = {
+          id: matched?.id || profile.referenceId || authUser.id,
+          authUserId: authUser.id,
+          name: matched
+            ? matched.title
+              ? `${matched.title} ${matched.fullName}`
+              : matched.fullName
+            : profile.fullName || authUser.user_metadata?.full_name || 'Parent / Guardian',
+          email,
+          role: 'parent',
+          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
+          referenceId: matched?.parentId || profile.referenceId,
+        };
+      } else {
+        const adminDisplayName =
+          profile.fullName ||
+          (typeof authUser.user_metadata?.full_name === 'string'
+            ? authUser.user_metadata.full_name
+            : '') ||
+          'System Administrator';
+        resolvedUser = {
+          id: profile.referenceId || 'usr-admin',
+          authUserId: authUser.id,
+          name: adminDisplayName,
+          email,
+          role: 'admin',
+          avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200',
+          referenceId: profile.referenceId || 'ADM-001',
+        };
+        setAdminCredentials((prev) => ({
+          ...prev,
+          name: adminDisplayName,
+          email,
+          isBootstrapped: true,
+        }));
+      }
+
+      setCurrentUser(resolvedUser);
+      setActiveRole(profile.role);
+
+      if (options?.navigateToPortal) {
+        setCurrentView(`${profile.role}-portal`);
+      }
+
+      return { ok: true };
+    },
+    [applyPublicSnapshot, clearPrivateCollections]
+  );
+
+  // Purge legacy localStorage credential/session keys & initialize Supabase Auth listener
+  useEffect(() => {
+    purgeSensitiveLocalStorage();
+
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    const bootstrapSession = async () => {
+      setAuthLoading(true);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!isMounted) return;
+
+        if (session?.user) {
+          const res = await hydrateAuthenticatedSession(session.user, { navigateToPortal: false });
+          if (!res.ok && isMounted) {
+            await supabase.auth.signOut();
+          }
+        } else {
+          clearPrivateCollections();
+          setCurrentUser(null);
+          setActiveRole('public');
+          await applyPublicSnapshot();
+        }
+      } finally {
+        if (isMounted) setAuthLoading(false);
+      }
+    };
+
+    void bootstrapSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!isMounted) return;
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthRecoveryMode(true);
+      }
+
+      if (event === 'SIGNED_OUT' || !session?.user) {
+        authSequenceRef.current += 1;
+        clearPrivateCollections();
+        setCurrentUser(null);
+        setActiveRole('public');
+        setCurrentView('home');
+        void applyPublicSnapshot();
+        return;
+      }
+
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+        setTimeout(() => {
+          if (!isMounted) return;
+          void hydrateAuthenticatedSession(session.user, {
+            navigateToPortal: event === 'SIGNED_IN',
+          });
+        }, 0);
+      }
     });
 
     return () => {
       isMounted = false;
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [applyPublicSnapshot, clearPrivateCollections, hydrateAuthenticatedSession]);
 
-  // Persist handlers
+  // Only persist public site content/settings to localStorage (never PII, credentials, or roles)
   useEffect(() => {
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_admin_creds`, JSON.stringify(adminCredentials));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_settings`, JSON.stringify(systemSettings));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_students`, JSON.stringify(students));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_teachers`, JSON.stringify(teachers));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_parents`, JSON.stringify(parents));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_classes`, JSON.stringify(classes));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_subjects`, JSON.stringify(subjects));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_scores`, JSON.stringify(scores));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_results`, JSON.stringify(results));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_attendance`, JSON.stringify(attendance));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_cbtExams`, JSON.stringify(cbtExams));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_cbtAttempts`, JSON.stringify(cbtAttempts));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_assignments`, JSON.stringify(assignments));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_notes`, JSON.stringify(studyNotes));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_news`, JSON.stringify(newsItems));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_gallery`, JSON.stringify(galleryImages));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_apps`, JSON.stringify(applications));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_downloads`, JSON.stringify(downloads));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_announcements`, JSON.stringify(announcements));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_fees`, JSON.stringify(feeRecords));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_current_user`, JSON.stringify(currentUser));
-    localStorage.setItem(`${LOCAL_STORAGE_KEY}_active_role`, JSON.stringify(activeRole));
-  }, [
-    currentUser,
-    activeRole,
-    adminCredentials,
-    systemSettings,
-    students,
-    teachers,
-    parents,
-    classes,
-    subjects,
-    scores,
-    results,
-    attendance,
-    cbtExams,
-    cbtAttempts,
-    assignments,
-    studyNotes,
-    newsItems,
-    galleryImages,
-    applications,
-    downloads,
-    announcements,
-    feeRecords,
-  ]);
+    try {
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_settings`, JSON.stringify(systemSettings));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_news`, JSON.stringify(newsItems));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_gallery`, JSON.stringify(galleryImages));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_downloads`, JSON.stringify(downloads));
+      localStorage.setItem(`${LOCAL_STORAGE_KEY}_announcements`, JSON.stringify(announcements));
+    } catch {
+      // ignore
+    }
+  }, [systemSettings, newsItems, galleryImages, downloads, announcements]);
 
-  // Role switching
-  const switchRole = (role: UserRole, userObj?: User | null) => {
-    setActiveRole(role);
-    if (role === 'public') {
-      setCurrentUser(null);
-      setCurrentView('home');
-      return;
+  const dismissAuthRecovery = () => setAuthRecoveryMode(false);
+
+  const signInWithPassword = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!isSupabaseConfigured || !supabase) {
+      return {
+        ok: false,
+        error:
+          'Supabase authentication is not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.',
+      };
     }
 
-    if (userObj) {
-      setCurrentUser(userObj);
-    } else if (role === 'admin') {
-      setCurrentUser({
-        id: 'usr-admin',
-        name: adminCredentials.name || 'System Administrator',
-        email: adminCredentials.email || adminCredentials.username || 'ezekielsamson1@gmail.com',
-        role: 'admin',
-        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200',
-        referenceId: 'ADM-001',
-      });
-    } else if (role === 'teacher') {
-      const teacherObj = teachers[0];
-      setCurrentUser({
-        id: teacherObj?.id || 'tch-102',
-        name: teacherObj ? `${teacherObj.firstName} ${teacherObj.lastName}` : 'Mr. David Adams',
-        email: teacherObj?.email || 'david.adams@divineacademy.edu',
-        role: 'teacher',
-        avatar: teacherObj?.avatar || 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200',
-        referenceId: teacherObj?.staffId || 'TCH-102',
-      });
-    } else if (role === 'student') {
-      const studentObj = students[0];
-      setCurrentUser({
-        id: studentObj?.id || 'std-004',
-        name: studentObj ? `${studentObj.firstName} ${studentObj.lastName}` : 'David Adeleke',
-        email: studentObj?.parentEmail || 'david.adeleke@student.divineacademy.edu',
-        role: 'student',
-        avatar: studentObj?.avatar || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&q=80&w=200',
-        referenceId: studentObj?.admissionNo || 'STD/2025/004',
-      });
-    } else if (role === 'parent') {
-      const parentObj = parents[0];
-      setCurrentUser({
-        id: parentObj?.id || 'prt-409',
-        name: parentObj ? (parentObj.title ? `${parentObj.title} ${parentObj.fullName}` : parentObj.fullName) : 'Chief Olabisi Adeleke',
-        email: parentObj?.email || 'parent.adeleke@gmail.com',
-        role: 'parent',
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-        referenceId: parentObj?.parentId || 'PRT-409',
-      });
+    const cleanedEmail = email.trim().toLowerCase();
+    if (!cleanedEmail || !password) {
+      return { ok: false, error: 'Please enter both your email address and password.' };
     }
 
-    if (role === 'teacher') setCurrentView('teacher-portal');
-    else if (role === 'student') setCurrentView('student-portal');
-    else if (role === 'parent') setCurrentView('parent-portal');
-    else if (role === 'admin') setCurrentView('admin-portal');
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanedEmail,
+      password,
+    });
+
+    if (error || !data.user) {
+      return {
+        ok: false,
+        error: error?.message || 'Invalid email or password.',
+      };
+    }
+
+    const hydrationResult = await hydrateAuthenticatedSession(data.user, {
+      navigateToPortal: true,
+    });
+    if (!hydrationResult.ok) {
+      await supabase.auth.signOut();
+      return {
+        ok: false,
+        error: hydrationResult.error || 'Account is not linked to an active school portal role.',
+      };
+    }
+
+    return { ok: true };
   };
 
-  const logout = () => {
+  const sendPasswordResetEmail = async (
+    email: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { ok: false, error: 'Supabase authentication is not configured.' };
+    }
+    const cleaned = email.trim().toLowerCase();
+    if (!cleaned || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) {
+      return { ok: false, error: 'Please enter a valid account email address.' };
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(cleaned, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  };
+
+  const updatePassword = async (
+    newPassword: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { ok: false, error: 'Supabase authentication is not configured.' };
+    }
+    if (newPassword.length < 8) {
+      return { ok: false, error: 'Password must be at least 8 characters long.' };
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      return { ok: false, error: error.message };
+    }
+    setAuthRecoveryMode(false);
+    return { ok: true };
+  };
+
+  const updateAdminAuthProfile = async (updates: {
+    name?: string;
+    email?: string;
+    password?: string;
+    username?: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can update admin credentials.' };
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const payload: {
+        email?: string;
+        password?: string;
+        data?: Record<string, any>;
+      } = {};
+
+      if (updates.email && updates.email.trim() && updates.email.trim() !== currentUser.email) {
+        payload.email = updates.email.trim();
+      }
+      if (updates.password && updates.password.trim()) {
+        if (updates.password.trim().length < 8) {
+          return { ok: false, error: 'New password must be at least 8 characters long.' };
+        }
+        payload.password = updates.password.trim();
+      }
+      if (updates.name && updates.name.trim()) {
+        payload.data = { full_name: updates.name.trim() };
+      }
+
+      if (payload.email || payload.password || payload.data) {
+        const { error } = await supabase.auth.updateUser(payload);
+        if (error) {
+          return { ok: false, error: error.message };
+        }
+      }
+    }
+
+    setAdminCredentials((prev) => ({
+      ...prev,
+      name: updates.name?.trim() || prev.name,
+      username: updates.username?.trim() || prev.username,
+      email: updates.email?.trim() || prev.email,
+    }));
+
+    setCurrentUser((curr) =>
+      curr
+        ? {
+            ...curr,
+            name: updates.name?.trim() || curr.name,
+            email: updates.email?.trim() || curr.email,
+          }
+        : null
+    );
+
+    return { ok: true };
+  };
+
+  const logout = async () => {
+    authSequenceRef.current += 1;
+    if (isSupabaseConfigured && supabase) {
+      await supabase.auth.signOut();
+    }
+    clearPrivateCollections();
     setCurrentUser(null);
     setActiveRole('public');
     setCurrentView('home');
+    setAuthRecoveryMode(false);
+    if (isSupabaseConfigured) {
+      await applyPublicSnapshot();
+    }
+  };
+
+  // Never allow client-side role elevation when Supabase is configured
+  const switchRole = (role: UserRole, _userObj?: User | null) => {
+    if (role === 'public') {
+      void logout();
+      return;
+    }
+    console.warn('[Security] Direct client-side role switching is disabled; sign in with Supabase Auth.');
   };
 
   const updateSystemSettings = (updated: Partial<SystemSessionTerm>) => {
@@ -472,13 +805,22 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateAdminCredentials = (updated: Partial<AdminCredentials>) => {
     setAdminCredentials((prev) => {
-      const next = { ...prev, ...updated };
+      const next = {
+        ...prev,
+        name: updated.name ?? prev.name,
+        email: updated.email ?? prev.email,
+        username: updated.username ?? prev.username,
+      };
       if (currentUser?.role === 'admin') {
-        setCurrentUser((curr) => curr ? {
-          ...curr,
-          name: next.name || curr.name,
-          email: next.email || curr.email,
-        } : null);
+        setCurrentUser((curr) =>
+          curr
+            ? {
+                ...curr,
+                name: next.name || curr.name,
+                email: next.email || curr.email,
+              }
+            : null
+        );
       }
       return next;
     });
@@ -486,18 +828,40 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // CRUD Implementations
   const addStudent = (newStudent: Omit<Student, 'id'>) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can enroll students.');
+      return;
+    }
     const id = `std-${Date.now()}`;
-    const created = { ...newStudent, id };
+    const { password: _ignoredPassword, resultPasscode, ...safeFields } = newStudent;
+    const created: Student = { ...safeFields, resultPasscode, id };
     setStudents((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertStudent(created);
+    void supabaseSchoolService.upsertStudent(created).then((res) => {
+      if (res.ok && resultPasscode) {
+        void supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode);
+      }
+    });
   };
 
   const updateStudent = (id: string, updated: Partial<Student>) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can update student records.');
+      return;
+    }
+    const { password: _ignoredPassword, resultPasscode, ...safeUpdated } = updated;
     setStudents((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s;
-        const next = { ...s, ...updated };
-        void supabaseSchoolService.upsertStudent(next);
+        const next: Student = {
+          ...s,
+          ...safeUpdated,
+          ...(resultPasscode !== undefined ? { resultPasscode } : {}),
+        };
+        void supabaseSchoolService.upsertStudent(next).then((res) => {
+          if (res.ok && resultPasscode && resultPasscode.trim()) {
+            void supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode.trim());
+          }
+        });
         return next;
       })
     );
@@ -513,46 +877,82 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const generateResultPasscodeForStudent = (studentId: string): string => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can generate result passcodes.');
+      return '';
+    }
     const newCode = generateAlphanumericPasscode();
     setStudents((prev) =>
-      prev.map((s) => {
-        if (s.id !== studentId) return s;
-        const next = { ...s, resultPasscode: newCode };
-        void supabaseSchoolService.upsertStudent(next);
-        return next;
-      })
+      prev.map((s) => (s.id === studentId ? { ...s, resultPasscode: newCode } : s))
     );
+    void supabaseSchoolService.upsertStudentResultPasscode(studentId, newCode);
     return newCode;
   };
 
   const bulkGenerateResultPasscodes = () => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can bulk-generate result passcodes.');
+      return;
+    }
     setStudents((prev) => {
       const nextList = prev.map((s) => ({
         ...s,
         resultPasscode: s.resultPasscode || generateAlphanumericPasscode(),
       }));
-      void supabaseSchoolService.upsertStudents(nextList);
+      const entries = nextList
+        .filter((s) => Boolean(s.resultPasscode))
+        .map((s) => ({ studentId: s.id, resultPasscode: s.resultPasscode as string }));
+      void supabaseSchoolService.upsertStudentResultPasscodesBulk(entries);
       return nextList;
     });
   };
 
+  const verifyResultPasscode = async (
+    studentId: string,
+    passcode: string
+  ): Promise<boolean> => {
+    const cleaned = passcode.trim().toUpperCase();
+    if (!cleaned) return false;
+
+    if (isSupabaseConfigured) {
+      return supabaseSchoolService.verifyStudentResultPasscode(studentId, cleaned);
+    }
+
+    const target = students.find((s) => s.id === studentId);
+    return Boolean(target?.resultPasscode && target.resultPasscode.trim().toUpperCase() === cleaned);
+  };
+
   const deleteStudent = (id: string) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can delete students.');
+      return;
+    }
     setStudents((prev) => prev.filter((s) => s.id !== id));
     void supabaseSchoolService.deleteStudent(id);
   };
 
   const addTeacher = (newTeacher: Omit<Teacher, 'id'>) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can add teachers.');
+      return;
+    }
     const id = `tch-${Date.now()}`;
-    const created = { ...newTeacher, id };
+    const { password: _ignoredPassword, ...safeTeacher } = newTeacher;
+    const created: Teacher = { ...safeTeacher, id };
     setTeachers((prev) => [...prev, created]);
     void supabaseSchoolService.upsertTeacher(created);
   };
 
   const updateTeacher = (id: string, updated: Partial<Teacher>) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can update teachers.');
+      return;
+    }
+    const { password: _ignoredPassword, ...safeUpdated } = updated;
     setTeachers((prev) =>
       prev.map((t) => {
         if (t.id !== id) return t;
-        const next = { ...t, ...updated };
+        const next = { ...t, ...safeUpdated };
         void supabaseSchoolService.upsertTeacher(next);
         return next;
       })
@@ -560,6 +960,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const deleteTeacher = (id: string) => {
+    if (activeRole !== 'admin') {
+      console.warn('[Security] Only administrators can delete teachers.');
+      return;
+    }
     setTeachers((prev) => prev.filter((t) => t.id !== id));
     void supabaseSchoolService.deleteTeacher(id);
   };
@@ -621,7 +1025,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         void supabaseSchoolService.upsertScore(nextScore);
         return updated;
       }
-      const created = { ...sanitizedScoreData, id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` };
+      const created = {
+        ...sanitizedScoreData,
+        id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      };
       void supabaseSchoolService.upsertScore(created);
       return [...prev, created];
     });
@@ -703,12 +1110,54 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const id = `attmpt-${Date.now()}`;
     const created = { ...attempt, id };
     setCbtAttempts((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertCBTAttempt(created);
   };
 
   const deleteCBTAttempt = (id: string) => {
     setCbtAttempts((prev) => prev.filter((a) => a.id !== id));
     void supabaseSchoolService.deleteCBTAttempt(id);
+  };
+
+  const startCBTExamSession = async (examId: string): Promise<CBTStartResponse> => {
+    if (!isSupabaseConfigured) {
+      const localExam = cbtExams.find((e) => e.id === examId);
+      if (!localExam) {
+        throw new Error('CBT exam not found.');
+      }
+      const now = Date.now();
+      return {
+        sessionId: `local-${now}`,
+        startedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + localExam.durationMinutes * 60000).toISOString(),
+        remainingSeconds: localExam.durationMinutes * 60,
+        exam: {
+          ...localExam,
+          questions: localExam.questions.map(({ correctOption: _c, explanation: _e, ...q }) => q),
+        },
+      };
+    }
+
+    return supabaseSchoolService.startCBTExam(examId);
+  };
+
+  const submitCBTExamSession = async (
+    examId: string,
+    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+  ): Promise<CBTSubmissionResponse> => {
+    if (isSupabaseConfigured) {
+      const response = await supabaseSchoolService.submitCBTExam(examId, answers);
+      setCbtAttempts((prev) => {
+        const filtered = prev.filter((a) => a.id !== response.attempt.id);
+        return [...filtered, response.attempt];
+      });
+      setCbtExams((prev) =>
+        prev.map((ex) =>
+          ex.id === examId ? { ...ex, hasAttempt: true, sessionStatus: 'submitted' } : ex
+        )
+      );
+      return response;
+    }
+
+    throw new Error('Supabase must be configured to submit and grade CBT examinations.');
   };
 
   const addAcademicSession = (newSession: string) => {
@@ -753,6 +1202,80 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const deleteAssignment = (id: string) => {
     setAssignments((prev) => prev.filter((a) => a.id !== id));
     void supabaseSchoolService.deleteAssignment(id);
+  };
+
+  const submitAssignmentAnswer = async (
+    assignmentId: string,
+    content: string,
+    fileUrl?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const studentObj =
+      students.find(
+        (s) =>
+          s.id === currentUser?.id ||
+          (currentUser?.authUserId && s.authUserId === currentUser.authUserId) ||
+          (currentUser?.referenceId &&
+            s.admissionNo?.toLowerCase() === currentUser.referenceId.toLowerCase())
+      ) || null;
+
+    if (!studentObj) {
+      return { ok: false, error: 'Linked student profile not found.' };
+    }
+
+    const alreadySubmitted = assignmentSubmissions.some(
+      (sub) => sub.assignmentId === assignmentId && sub.studentId === studentObj.id
+    );
+    if (alreadySubmitted) {
+      return { ok: false, error: 'You have already submitted an answer for this assignment.' };
+    }
+
+    const newSubmission: AssignmentSubmission = {
+      id: `subm-${Date.now()}`,
+      assignmentId,
+      studentId: studentObj.id,
+      studentName: `${studentObj.firstName} ${studentObj.lastName}`,
+      submissionDate: new Date().toISOString().split('T')[0],
+      content: content.trim(),
+      fileUrl: fileUrl?.trim() || undefined,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.insertAssignmentSubmission(newSubmission);
+      if (!res.ok) {
+        return res;
+      }
+    }
+
+    setAssignmentSubmissions((prev) => [...prev, newSubmission]);
+    return { ok: true };
+  };
+
+  const gradeAssignmentSubmission = async (
+    submissionId: string,
+    grade: number | undefined,
+    feedback: string | undefined
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'teacher' && activeRole !== 'admin') {
+      return { ok: false, error: 'Only teachers or administrators can grade submissions.' };
+    }
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.gradeAssignmentSubmission(
+        submissionId,
+        grade,
+        feedback
+      );
+      if (!res.ok) {
+        return res;
+      }
+    }
+
+    setAssignmentSubmissions((prev) =>
+      prev.map((sub) =>
+        sub.id === submissionId ? { ...sub, grade, feedback } : sub
+      )
+    );
+    return { ok: true };
   };
 
   const createStudyNote = (note: Omit<StudyNote, 'id'>) => {
@@ -810,7 +1333,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return appNum;
   };
 
-  const updateApplicationStatus = (id: string, status: OnlineApplication['status'], notes?: string) => {
+  const updateApplicationStatus = (
+    id: string,
+    status: OnlineApplication['status'],
+    notes?: string
+  ) => {
     setApplications((prev) =>
       prev.map((app) => {
         if (app.id !== id) return app;
@@ -862,30 +1389,19 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    const keysToRemove = [
-      'settings',
-      'students',
-      'teachers',
-      'parents',
-      'classes',
-      'subjects',
-      'scores',
-      'results',
-      'attendance',
-      'cbtExams',
-      'cbtAttempts',
-      'assignments',
-      'notes',
-      'news',
-      'gallery',
-      'apps',
-      'downloads',
-      'announcements',
-      'fees',
-    ];
-    keysToRemove.forEach((suffix) => {
-      localStorage.removeItem(`${LOCAL_STORAGE_KEY}_${suffix}`);
+    purgeSensitiveLocalStorage();
+    ['settings', 'news', 'gallery', 'downloads', 'announcements'].forEach((suffix) => {
+      try {
+        localStorage.removeItem(`${LOCAL_STORAGE_KEY}_${suffix}`);
+      } catch {
+        // ignore
+      }
     });
+
+    if (isSupabaseConfigured) {
+      void applyPublicSnapshot();
+      return;
+    }
 
     setSystemSettings(initialSystemSettings);
     setStudents(sampleStudents);
@@ -899,6 +1415,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCbtExams(sampleCBTExams);
     setCbtAttempts(sampleCBTAttempts);
     setAssignments(sampleAssignments);
+    setAssignmentSubmissions([]);
     setStudyNotes(sampleNotes);
     setNewsItems(sampleNews);
     setGalleryImages(sampleGallery);
@@ -913,8 +1430,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       value={{
         currentUser,
         activeRole,
+        authLoading,
+        authRecoveryMode,
+        dismissAuthRecovery,
         setCurrentUser,
         switchRole,
+        signInWithPassword,
+        sendPasswordResetEmail,
+        updatePassword,
+        updateAdminAuthProfile,
         logout,
         currentView,
         setCurrentView,
@@ -922,7 +1446,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateSystemSettings,
         adminCredentials,
         updateAdminCredentials,
-        academicSessions: systemSettings.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'],
+        academicSessions:
+          systemSettings.academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'],
         addAcademicSession,
         deleteAcademicSession,
         students,
@@ -936,6 +1461,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cbtExams,
         cbtAttempts,
         assignments,
+        assignmentSubmissions,
         studyNotes,
         newsItems,
         galleryImages,
@@ -948,6 +1474,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteStudent,
         generateResultPasscodeForStudent,
         bulkGenerateResultPasscodes,
+        verifyResultPasscode,
         addTeacher,
         updateTeacher,
         deleteTeacher,
@@ -965,9 +1492,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteMultipleCBTExams,
         submitCBTAttempt,
         deleteCBTAttempt,
+        startCBTExamSession,
+        submitCBTExamSession,
         createAssignment,
         addAssignment: createAssignment,
         deleteAssignment,
+        submitAssignmentAnswer,
+        gradeAssignmentSubmission,
         createStudyNote,
         addStudyNote: createStudyNote,
         deleteStudyNote,

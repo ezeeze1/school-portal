@@ -4,18 +4,19 @@ import { Settings, CheckCircle2, Save, Lock, Unlock, Globe, Info, Award, ShieldC
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AcademicSessionManager: React.FC = () => {
-  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminCredentials, academicSessions, addAcademicSession, deleteAcademicSession, resetToDefaultData, activeRole, currentUser } = useSchool();
+  const { systemSettings, updateSystemSettings, adminCredentials, updateAdminAuthProfile, academicSessions, addAcademicSession, deleteAcademicSession, resetToDefaultData, activeRole, currentUser } = useSchool();
   const [showResetCacheModal, setShowResetCacheModal] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<'academic' | 'security' | 'general'>('academic');
   const [generalSection, setGeneralSection] = useState<'identity' | 'hero' | 'stats' | 'about'>('identity');
 
-  // Admin Security & Credentials State
-  const [adminName, setAdminName] = useState(adminCredentials.name || '');
-  const [adminUsername, setAdminUsername] = useState(adminCredentials.username || '');
-  const [adminEmail, setAdminEmail] = useState(adminCredentials.email || '');
-  const [adminPassword, setAdminPassword] = useState(adminCredentials.password || '');
-  const [confirmPassword, setConfirmPassword] = useState(adminCredentials.password || '');
+  // Admin Security & Credentials State (never pre-fill passwords)
+  const [adminName, setAdminName] = useState(currentUser?.name || adminCredentials.name || '');
+  const [adminUsername, setAdminUsername] = useState(adminCredentials.username || 'admin');
+  const [adminEmail, setAdminEmail] = useState(currentUser?.email || adminCredentials.email || '');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isSavingSecurity, setIsSavingSecurity] = useState(false);
   const [secError, setSecError] = useState<string | null>(null);
   const [secSuccess, setSecSuccess] = useState<string | null>(null);
 
@@ -137,13 +138,13 @@ export const AcademicSessionManager: React.FC = () => {
     setTimeout(() => setSaved(false), 3000);
   };
 
-  const handleSaveAdminSecurity = (e: React.FormEvent) => {
+  const handleSaveAdminSecurity = async (e: React.FormEvent) => {
     e.preventDefault();
     setSecError(null);
     setSecSuccess(null);
 
     if (!adminUsername.trim()) {
-      setSecError('Admin Username / Login Identifier cannot be empty.');
+      setSecError('Admin Username / Display Identifier cannot be empty.');
       return;
     }
 
@@ -152,25 +153,40 @@ export const AcademicSessionManager: React.FC = () => {
       return;
     }
 
-    if (adminPassword.length < 4) {
-      setSecError('Password must be at least 4 characters long.');
-      return;
+    if (adminPassword.trim()) {
+      if (adminPassword.trim().length < 8) {
+        setSecError('New password must be at least 8 characters long.');
+        return;
+      }
+      if (adminPassword !== confirmPassword) {
+        setSecError('New password and confirm password do not match!');
+        return;
+      }
     }
 
-    if (adminPassword !== confirmPassword) {
-      setSecError('New password and confirm password do not match!');
-      return;
+    setIsSavingSecurity(true);
+    try {
+      const res = await updateAdminAuthProfile({
+        name: adminName.trim(),
+        username: adminUsername.trim(),
+        email: adminEmail.trim(),
+        password: adminPassword.trim() || undefined,
+      });
+
+      if (!res.ok) {
+        setSecError(res.error || 'Failed to update administrator credentials in Supabase Auth.');
+        return;
+      }
+
+      setAdminPassword('');
+      setConfirmPassword('');
+      setSecSuccess(
+        'Administrator account security updated via Supabase Auth! If you changed your email, please confirm the verification email.'
+      );
+      setTimeout(() => setSecSuccess(null), 6000);
+    } finally {
+      setIsSavingSecurity(false);
     }
-
-    updateAdminCredentials({
-      name: adminName.trim(),
-      username: adminUsername.trim(),
-      email: adminEmail.trim(),
-      password: adminPassword.trim(),
-    });
-
-    setSecSuccess('Administrator username and password updated successfully! Your new credentials are live.');
-    setTimeout(() => setSecSuccess(null), 5000);
   };
 
   const handleSaveGeneral = (e: React.FormEvent) => {
@@ -589,15 +605,14 @@ export const AcademicSessionManager: React.FC = () => {
 
             <div className="space-y-1">
               <label className="block font-bold text-slate-700 dark:text-slate-300">
-                New Password *
+                New Password (Optional, min 8 characters)
               </label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  required
                   value={adminPassword}
                   onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Enter new admin password"
+                  placeholder="Leave blank to keep current password"
                   className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-amber-500 pr-10"
                 />
                 <button
@@ -612,12 +627,11 @@ export const AcademicSessionManager: React.FC = () => {
 
             <div className="space-y-1">
               <label className="block font-bold text-slate-700 dark:text-slate-300">
-                Confirm New Password *
+                Confirm New Password
               </label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-type new admin password"
@@ -636,14 +650,15 @@ export const AcademicSessionManager: React.FC = () => {
 
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="text-[11px] text-slate-500 flex items-center gap-1">
-              <Lock className="w-3.5 h-3.5 text-amber-500" /> Changes apply immediately and are stored in browser storage until Supabase Auth migration.
+              <Lock className="w-3.5 h-3.5 text-amber-500" /> Password and email updates are saved directly to your Supabase Auth account.
             </div>
 
             <button
               type="submit"
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
+              disabled={isSavingSecurity}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-8 py-3 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-60"
             >
-              <Key className="w-4 h-4" /> Save Admin Credentials
+              <Key className="w-4 h-4" /> {isSavingSecurity ? 'Updating...' : 'Save Admin Credentials'}
             </button>
           </div>
 

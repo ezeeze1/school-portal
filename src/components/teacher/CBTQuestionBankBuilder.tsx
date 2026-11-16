@@ -670,7 +670,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                   <div>
                     <label className="font-bold mr-2 text-slate-700 dark:text-slate-300">Correct Option:</label>
                     <select
-                      value={q.correctOption}
+                      value={q.correctOption || 'A'}
                       onChange={(e) => handleUpdateQuestion(idx, { correctOption: e.target.value as any })}
                       className="p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-bold text-amber-500"
                     >

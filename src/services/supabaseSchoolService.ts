@@ -10,7 +10,10 @@ import {
   AttendanceRecord,
   CBTExam,
   CBTAttempt,
+  CBTStartResponse,
+  CBTSubmissionResponse,
   Assignment,
+  AssignmentSubmission,
   StudyNote,
   NewsItem,
   GalleryImage,
@@ -19,6 +22,8 @@ import {
   AnnouncementNotification,
   FeeRecord,
   SystemSessionTerm,
+  UserProfile,
+  UserRole,
 } from '../types';
 
 export interface SupabasePortalSnapshot {
@@ -34,6 +39,7 @@ export interface SupabasePortalSnapshot {
   cbtExams?: CBTExam[];
   cbtAttempts?: CBTAttempt[];
   assignments?: Assignment[];
+  assignmentSubmissions?: AssignmentSubmission[];
   studyNotes?: StudyNote[];
   newsItems?: NewsItem[];
   galleryImages?: GalleryImage[];
@@ -95,8 +101,8 @@ const fromSystemSettingsRow = (r: Record<string, any>): SystemSessionTerm => ({
   academicSessions: Array.isArray(r.academic_sessions) ? r.academic_sessions : undefined,
   currentTerm: r.current_term,
   isResultPublished: r.is_result_published ?? undefined,
-  resultEntryOpen: Boolean(r.result_entry_open),
-  cbtActive: Boolean(r.cbt_active),
+  resultEntryOpen: Boolean(r.result_entry_open ?? false),
+  cbtActive: Boolean(r.cbt_active ?? true),
   schoolName: r.school_name ?? undefined,
   schoolMotto: r.school_motto ?? undefined,
   schoolLogoText: r.school_logo_text ?? undefined,
@@ -126,12 +132,15 @@ const fromSystemSettingsRow = (r: Record<string, any>): SystemSessionTerm => ({
   aboutPrincipalBio: r.about_principal_bio ?? undefined,
 });
 
+// Never write plaintext passwords or result_passcode to public.students
 const toStudentRow = (s: Student) => ({
   id: s.id,
+  auth_user_id: s.authUserId ?? null,
   admission_no: s.admissionNo,
   first_name: s.firstName,
   last_name: s.lastName,
   other_names: s.otherNames ?? null,
+  email: s.email ?? null,
   gender: s.gender,
   dob: s.dob,
   class_id: s.classId,
@@ -141,8 +150,6 @@ const toStudentRow = (s: Student) => ({
   parent_name: s.parentName,
   parent_phone: s.parentPhone,
   parent_email: s.parentEmail ?? null,
-  password: s.password ?? null,
-  result_passcode: s.resultPasscode ?? null,
   address: s.address,
   avatar: s.avatar,
   status: s.status,
@@ -150,10 +157,12 @@ const toStudentRow = (s: Student) => ({
 
 const fromStudentRow = (r: Record<string, any>): Student => ({
   id: r.id,
+  authUserId: r.auth_user_id ?? undefined,
   admissionNo: r.admission_no,
   firstName: r.first_name,
   lastName: r.last_name,
   otherNames: r.other_names ?? undefined,
+  email: r.email ?? undefined,
   gender: r.gender,
   dob: r.dob,
   classId: r.class_id,
@@ -163,22 +172,21 @@ const fromStudentRow = (r: Record<string, any>): Student => ({
   parentName: r.parent_name,
   parentPhone: r.parent_phone,
   parentEmail: r.parent_email ?? undefined,
-  password: r.password ?? undefined,
-  resultPasscode: r.result_passcode ?? undefined,
   address: r.address,
   avatar: r.avatar,
   status: r.status,
 });
 
+// Never write plaintext passwords to public.teachers
 const toTeacherRow = (t: Teacher) => ({
   id: t.id,
+  auth_user_id: t.authUserId ?? null,
   staff_id: t.staffId,
   first_name: t.firstName,
   last_name: t.lastName,
   qualification: t.qualification ?? null,
   email: t.email,
   phone: t.phone,
-  password: t.password ?? null,
   subject_ids: t.subjectIds ?? [],
   subjects_taught: t.subjectsTaught ?? [],
   form_class_id: t.formClassId ?? null,
@@ -192,13 +200,13 @@ const toTeacherRow = (t: Teacher) => ({
 
 const fromTeacherRow = (r: Record<string, any>): Teacher => ({
   id: r.id,
+  authUserId: r.auth_user_id ?? undefined,
   staffId: r.staff_id,
   firstName: r.first_name,
   lastName: r.last_name,
   qualification: r.qualification ?? undefined,
   email: r.email,
   phone: r.phone,
-  password: r.password ?? undefined,
   subjectIds: Array.isArray(r.subject_ids) ? r.subject_ids : undefined,
   subjectsTaught: Array.isArray(r.subjects_taught) ? r.subjects_taught : [],
   formClassId: r.form_class_id ?? undefined,
@@ -212,6 +220,7 @@ const fromTeacherRow = (r: Record<string, any>): Teacher => ({
 
 const toParentRow = (p: Parent) => ({
   id: p.id,
+  auth_user_id: p.authUserId ?? null,
   parent_id: p.parentId,
   title: p.title,
   full_name: p.fullName,
@@ -224,6 +233,7 @@ const toParentRow = (p: Parent) => ({
 
 const fromParentRow = (r: Record<string, any>): Parent => ({
   id: r.id,
+  authUserId: r.auth_user_id ?? undefined,
   parentId: r.parent_id,
   title: r.title,
   fullName: r.full_name,
@@ -482,6 +492,30 @@ const fromAssignmentRow = (r: Record<string, any>): Assignment => ({
   totalMarks: r.total_marks != null ? Number(r.total_marks) : undefined,
 });
 
+const toAssignmentSubmissionInsertRow = (s: AssignmentSubmission) => ({
+  id: s.id,
+  assignment_id: s.assignmentId,
+  student_id: s.studentId,
+  student_name: s.studentName,
+  submission_date: s.submissionDate,
+  content: s.content,
+  file_url: s.fileUrl ?? null,
+  grade: null,
+  feedback: null,
+});
+
+const fromAssignmentSubmissionRow = (r: Record<string, any>): AssignmentSubmission => ({
+  id: r.id,
+  assignmentId: r.assignment_id,
+  studentId: r.student_id,
+  studentName: r.student_name,
+  submissionDate: r.submission_date,
+  content: r.content ?? '',
+  fileUrl: r.file_url ?? undefined,
+  grade: r.grade != null ? Number(r.grade) : undefined,
+  feedback: r.feedback ?? undefined,
+});
+
 const toStudyNoteRow = (n: StudyNote) => ({
   id: n.id,
   title: n.title,
@@ -615,9 +649,9 @@ const toAnnouncementRow = (a: AnnouncementNotification) => ({
   title: a.title,
   message: a.message,
   sender: a.sender,
-  target_audience: a.targetAudience ?? null,
-  target_role: a.targetRole ?? null,
-  priority: a.priority ?? null,
+  target_audience: a.targetAudience ?? a.targetRole ?? 'All',
+  target_role: a.targetRole ?? a.targetAudience ?? 'All',
+  priority: a.priority ?? 'Normal',
   date: a.date,
 });
 
@@ -668,17 +702,19 @@ const fromFeeRecordRow = (r: Record<string, any>): FeeRecord => ({
 
 async function safeSelect<T>(
   table: string,
-  mapper: (row: Record<string, any>) => T
+  mapper: (row: Record<string, any>) => T,
+  options?: { allowEmpty?: boolean }
 ): Promise<T[] | undefined> {
   if (!supabase) return undefined;
   try {
     const { data, error } = await supabase.from(table).select('*');
     if (error) {
-      console.warn(`[Supabase] Could not read table "${table}": ${error.message}`);
+      console.warn(`[Supabase] Could not read "${table}": ${error.message}`);
       return undefined;
     }
-    if (!data || data.length === 0) {
-      return undefined; // Preserve existing data; do not overwrite with empty
+    if (!data) return undefined;
+    if (data.length === 0 && !options?.allowEmpty) {
+      return undefined;
     }
     return data.map(mapper);
   } catch (err) {
@@ -687,15 +723,23 @@ async function safeSelect<T>(
   }
 }
 
-async function safeUpsert(table: string, payload: Record<string, any> | Record<string, any>[]): Promise<void> {
-  if (!supabase) return;
+async function safeUpsert(
+  table: string,
+  payload: Record<string, any> | Record<string, any>[],
+  onConflict = 'id'
+): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Supabase not configured' };
   try {
-    const { error } = await supabase.from(table).upsert(payload, { onConflict: 'id' });
+    const { error } = await supabase.from(table).upsert(payload, { onConflict });
     if (error) {
       console.warn(`[Supabase] Upsert error on "${table}": ${error.message}`);
+      return { ok: false, error: error.message };
     }
+    return { ok: true };
   } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
     console.warn(`[Supabase] Upsert exception on "${table}":`, err);
+    return { ok: false, error: msg };
   }
 }
 
@@ -727,15 +771,81 @@ export const supabaseSchoolService = {
   isConfigured: () => isSupabaseConfigured,
 
   /**
-   * Fetches existing records from Supabase tables without overwriting or seeding sample data.
-   * Only tables that already contain data in Supabase will be returned in the snapshot.
+   * Resolves and auto-links the current authenticated Supabase user to their
+   * active role profile (`admin`, `teacher`, `parent`, `student`) on the server.
+   * Never creates or elevates an `admin` role.
    */
-  async fetchPortalSnapshot(): Promise<SupabasePortalSnapshot> {
+  async syncMyUserProfile(): Promise<{ profile: UserProfile | null; error?: string }> {
+    if (!supabase) return { profile: null, error: 'Supabase is not configured.' };
+    try {
+      const { data, error } = await supabase.rpc('sync_my_user_profile');
+      if (error) {
+        return { profile: null, error: error.message };
+      }
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row || !row.auth_user_id || !row.role) {
+        return { profile: null };
+      }
+      return {
+        profile: {
+          authUserId: row.auth_user_id,
+          role: row.role,
+          referenceId: row.reference_id ?? undefined,
+          email: row.email ?? '',
+          fullName: row.full_name ?? undefined,
+          isActive: Boolean(row.is_active),
+        },
+      };
+    } catch (err) {
+      return {
+        profile: null,
+        error: err instanceof Error ? err.message : 'Unable to resolve user profile.',
+      };
+    }
+  },
+
+  /**
+   * Safe unauthenticated (`anon`) snapshot reading ONLY public views/tables.
+   */
+  async fetchPublicSnapshot(): Promise<SupabasePortalSnapshot> {
     if (!supabase) return {};
+
+    const [settingsRows, newsItems, galleryImages, downloads, announcements] = await Promise.all([
+      safeSelect('public_site_settings', fromSystemSettingsRow),
+      safeSelect('news_items', fromNewsRow),
+      safeSelect('gallery_images', fromGalleryRow),
+      safeSelect('download_documents', fromDownloadRow),
+      safeSelect('announcements', fromAnnouncementRow),
+    ]);
+
+    return {
+      systemSettings: settingsRows?.[0],
+      newsItems,
+      galleryImages,
+      downloads,
+      announcements,
+    };
+  },
+
+  /**
+   * Role-scoped snapshot for authenticated users.
+   * Reads `students_safe` and `teachers_safe` (excluding protected credential columns).
+   * Students receive sanitized CBT summaries via `get_student_cbt_exams()` RPC (no answer keys).
+   */
+  async fetchPortalSnapshot(role: UserRole = 'public'): Promise<SupabasePortalSnapshot> {
+    if (!supabase) return {};
+    if (role === 'public') {
+      return this.fetchPublicSnapshot();
+    }
+
+    const isAdmin = role === 'admin';
+    const isTeacher = role === 'teacher';
+    const isStudent = role === 'student';
 
     const [
       settingsRows,
-      students,
+      studentsRaw,
+      passcodeRows,
       teachers,
       parents,
       classes,
@@ -746,6 +856,7 @@ export const supabaseSchoolService = {
       cbtExams,
       cbtAttempts,
       assignments,
+      assignmentSubmissions,
       studyNotes,
       newsItems,
       galleryImages,
@@ -755,25 +866,50 @@ export const supabaseSchoolService = {
       feeRecords,
     ] = await Promise.all([
       safeSelect('system_settings', fromSystemSettingsRow),
-      safeSelect('students', fromStudentRow),
-      safeSelect('teachers', fromTeacherRow),
-      safeSelect('parents', fromParentRow),
-      safeSelect('classes', fromClassRow),
-      safeSelect('subjects', fromSubjectRow),
-      safeSelect('scores', fromScoreRow),
-      safeSelect('terminal_results', fromResultRow),
-      safeSelect('attendance', fromAttendanceRow),
-      safeSelect('cbt_exams', fromCBTExamRow),
-      safeSelect('cbt_attempts', fromCBTAttemptRow),
-      safeSelect('assignments', fromAssignmentRow),
-      safeSelect('study_notes', fromStudyNoteRow),
+      safeSelect('students_safe', fromStudentRow, { allowEmpty: true }),
+      isAdmin
+        ? safeSelect<{ studentId: string; resultPasscode: string }>(
+            'student_result_passcodes',
+            (r) => ({ studentId: r.student_id as string, resultPasscode: r.result_passcode as string }),
+            { allowEmpty: true }
+          )
+        : Promise.resolve(undefined as { studentId: string; resultPasscode: string }[] | undefined),
+      safeSelect('teachers_safe', fromTeacherRow, { allowEmpty: true }),
+      safeSelect('parents', fromParentRow, { allowEmpty: true }),
+      safeSelect('classes', fromClassRow, { allowEmpty: true }),
+      safeSelect('subjects', fromSubjectRow, { allowEmpty: true }),
+      safeSelect('scores', fromScoreRow, { allowEmpty: true }),
+      safeSelect('terminal_results', fromResultRow, { allowEmpty: true }),
+      safeSelect('attendance', fromAttendanceRow, { allowEmpty: true }),
+      isStudent
+        ? this.getStudentCBTExams()
+        : isAdmin || isTeacher
+          ? safeSelect('cbt_exams', fromCBTExamRow, { allowEmpty: true })
+          : Promise.resolve(undefined),
+      safeSelect('cbt_attempts', fromCBTAttemptRow, { allowEmpty: true }),
+      safeSelect('assignments', fromAssignmentRow, { allowEmpty: true }),
+      safeSelect('assignment_submissions', fromAssignmentSubmissionRow, { allowEmpty: true }),
+      safeSelect('study_notes', fromStudyNoteRow, { allowEmpty: true }),
       safeSelect('news_items', fromNewsRow),
       safeSelect('gallery_images', fromGalleryRow),
-      safeSelect('online_applications', fromApplicationRow),
+      isAdmin
+        ? safeSelect('online_applications', fromApplicationRow, { allowEmpty: true })
+        : Promise.resolve(undefined),
       safeSelect('download_documents', fromDownloadRow),
       safeSelect('announcements', fromAnnouncementRow),
-      safeSelect('fee_records', fromFeeRecordRow),
+      safeSelect('fee_records', fromFeeRecordRow, { allowEmpty: true }),
     ]);
+
+    let students = studentsRaw;
+    if (isAdmin && students && passcodeRows) {
+      const codeMap = new Map<string, string>(
+        passcodeRows.map((p) => [p.studentId, p.resultPasscode])
+      );
+      students = students.map((s) => ({
+        ...s,
+        resultPasscode: codeMap.get(s.id) ?? s.resultPasscode,
+      }));
+    }
 
     return {
       systemSettings: settingsRows?.[0],
@@ -788,6 +924,7 @@ export const supabaseSchoolService = {
       cbtExams,
       cbtAttempts,
       assignments,
+      assignmentSubmissions,
       studyNotes,
       newsItems,
       galleryImages,
@@ -798,6 +935,88 @@ export const supabaseSchoolService = {
     };
   },
 
+  // Server-side RPCs (Priority 4)
+  async verifyStudentResultPasscode(studentId: string, passcode: string): Promise<boolean> {
+    if (!supabase) return false;
+    try {
+      const { data, error } = await supabase.rpc('verify_student_result_passcode', {
+        p_student_id: studentId,
+        p_passcode: passcode,
+      });
+      if (error) {
+        console.warn('[Supabase] Passcode verification failed:', error.message);
+        return false;
+      }
+      return Boolean(data);
+    } catch (err) {
+      console.warn('[Supabase] Passcode verification error:', err);
+      return false;
+    }
+  },
+
+  async getStudentCBTExams(): Promise<CBTExam[] | undefined> {
+    if (!supabase) return undefined;
+    try {
+      const { data, error } = await supabase.rpc('get_student_cbt_exams');
+      if (error) {
+        console.warn('[Supabase] Could not load student CBT exams:', error.message);
+        return undefined;
+      }
+      if (!Array.isArray(data)) return [];
+      return data as CBTExam[];
+    } catch (err) {
+      console.warn('[Supabase] get_student_cbt_exams error:', err);
+      return undefined;
+    }
+  },
+
+  async startCBTExam(examId: string): Promise<CBTStartResponse> {
+    if (!supabase) {
+      throw new Error('Supabase client is not initialized.');
+    }
+    const { data, error } = await supabase.rpc('start_cbt_exam', {
+      p_exam_id: examId,
+    });
+    if (error) {
+      throw new Error(error.message || 'Unable to start CBT exam session.');
+    }
+    return data as CBTStartResponse;
+  },
+
+  async submitCBTExam(
+    examId: string,
+    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+  ): Promise<CBTSubmissionResponse> {
+    if (!supabase) {
+      throw new Error('Supabase client is not initialized.');
+    }
+    const { data, error } = await supabase.rpc('submit_cbt_exam', {
+      p_exam_id: examId,
+      p_answers: answers,
+    });
+    if (error) {
+      throw new Error(error.message || 'Unable to submit CBT exam.');
+    }
+    return data as CBTSubmissionResponse;
+  },
+
+  // Admin-only result passcode persistence
+  upsertStudentResultPasscode: (studentId: string, resultPasscode: string) =>
+    safeUpsert(
+      'student_result_passcodes',
+      { student_id: studentId, result_passcode: resultPasscode },
+      'student_id'
+    ),
+
+  upsertStudentResultPasscodesBulk: (entries: { studentId: string; resultPasscode: string }[]) =>
+    entries.length > 0
+      ? safeUpsert(
+          'student_result_passcodes',
+          entries.map((e) => ({ student_id: e.studentId, result_passcode: e.resultPasscode })),
+          'student_id'
+        )
+      : Promise.resolve({ ok: true }),
+
   upsertSystemSettings: (settings: SystemSessionTerm) =>
     safeUpsert('system_settings', toSystemSettingsRow(settings)),
 
@@ -805,7 +1024,7 @@ export const supabaseSchoolService = {
     safeUpsert('students', toStudentRow(student)),
 
   upsertStudents: (students: Student[]) =>
-    students.length > 0 ? safeUpsert('students', students.map(toStudentRow)) : Promise.resolve(),
+    students.length > 0 ? safeUpsert('students', students.map(toStudentRow)) : Promise.resolve({ ok: true }),
 
   deleteStudent: (id: string) => safeDeleteById('students', id),
 
@@ -827,41 +1046,24 @@ export const supabaseSchoolService = {
     safeUpsert('scores', toScoreRow(score)),
 
   upsertScores: (scores: ScoreRecord[]) =>
-    scores.length > 0 ? safeUpsert('scores', scores.map(toScoreRow)) : Promise.resolve(),
+    scores.length > 0 ? safeUpsert('scores', scores.map(toScoreRow)) : Promise.resolve({ ok: true }),
 
   upsertResult: (result: TerminalResult) =>
     safeUpsert('terminal_results', toResultRow(result)),
 
   upsertAttendanceBatch: (records: AttendanceRecord[]) =>
-    records.length > 0 ? safeUpsert('attendance', records.map(toAttendanceRow)) : Promise.resolve(),
+    records.length > 0 ? safeUpsert('attendance', records.map(toAttendanceRow)) : Promise.resolve({ ok: true }),
 
   upsertCBTExam: (exam: CBTExam) =>
     safeUpsert('cbt_exams', toCBTExamRow(exam)),
 
   deleteCBTExam: async (id: string) => {
     await safeDeleteById('cbt_exams', id);
-    if (supabase) {
-      try {
-        await supabase.from('cbt_attempts').delete().eq('exam_id', id);
-      } catch (err) {
-        console.warn('[Supabase] Delete related cbt_attempts warning:', err);
-      }
-    }
   },
 
   deleteMultipleCBTExams: async (ids: string[]) => {
     await safeDeleteByIds('cbt_exams', ids);
-    if (supabase && ids.length > 0) {
-      try {
-        await supabase.from('cbt_attempts').delete().in('exam_id', ids);
-      } catch (err) {
-        console.warn('[Supabase] Batch delete related cbt_attempts warning:', err);
-      }
-    }
   },
-
-  upsertCBTAttempt: (attempt: CBTAttempt) =>
-    safeUpsert('cbt_attempts', toCBTAttemptRow(attempt)),
 
   deleteCBTAttempt: (id: string) => safeDeleteById('cbt_attempts', id),
 
@@ -869,6 +1071,51 @@ export const supabaseSchoolService = {
     safeUpsert('assignments', toAssignmentRow(assignment)),
 
   deleteAssignment: (id: string) => safeDeleteById('assignments', id),
+
+  async insertAssignmentSubmission(
+    submission: AssignmentSubmission
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase
+        .from('assignment_submissions')
+        .insert(toAssignmentSubmissionInsertRow(submission));
+      if (error) {
+        console.warn('[Supabase] Assignment submission error:', error.message);
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to submit assignment.',
+      };
+    }
+  },
+
+  async gradeAssignmentSubmission(
+    id: string,
+    grade: number | undefined,
+    feedback: string | undefined
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase
+        .from('assignment_submissions')
+        .update({ grade: grade ?? null, feedback: feedback ?? null })
+        .eq('id', id);
+      if (error) {
+        console.warn('[Supabase] Grade submission error:', error.message);
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to grade submission.',
+      };
+    }
+  },
 
   upsertStudyNote: (note: StudyNote) =>
     safeUpsert('study_notes', toStudyNoteRow(note)),
@@ -894,7 +1141,7 @@ export const supabaseSchoolService = {
     safeUpsert('fee_records', toFeeRecordRow(fee)),
 
   upsertFeeRecords: (fees: FeeRecord[]) =>
-    fees.length > 0 ? safeUpsert('fee_records', fees.map(toFeeRecordRow)) : Promise.resolve(),
+    fees.length > 0 ? safeUpsert('fee_records', fees.map(toFeeRecordRow)) : Promise.resolve({ ok: true }),
 
   deleteFeeRecord: (id: string) => safeDeleteById('fee_records', id),
 };

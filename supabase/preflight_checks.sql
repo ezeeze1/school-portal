@@ -7,7 +7,7 @@
 --   Never references a table or column before verifying existence in catalog.
 --   Uses session-only pg_temp helper functions (zero persistent DB writes).
 --   Reports:
---     1. Fresh/empty database readiness & missing tables/columns (all 26 tables)
+--     1. Fresh/empty database readiness & missing tables/columns (all 27 tables)
 --     2. Duplicate records blocking UNIQUE indexes
 --     3. Orphan foreign-key references (including guarded JSONB arrays & 'all')
 --     4. JSONB data-type validation (array vs object)
@@ -44,9 +44,9 @@ DECLARE
     'user_profiles','academic_sessions','system_settings','teachers','classes',
     'subjects','students','student_result_passcodes','parents','parent_students',
     'teacher_subjects','scores','terminal_results','attendance','cbt_exams',
-    'cbt_questions','cbt_attempts','assignments','assignment_submissions',
-    'study_notes','news_items','gallery_images','online_applications',
-    'download_documents','announcements','fee_records'
+    'cbt_questions','cbt_attempts','cbt_exam_sessions','assignments',
+    'assignment_submissions','study_notes','news_items','gallery_images',
+    'online_applications','download_documents','announcements','fee_records'
   ];
   v_existing_count integer := 0;
   v_tbl text;
@@ -54,7 +54,7 @@ DECLARE
   v_rec record;
 BEGIN
   -- --------------------------------------------------------------------------
-  -- 1. OVERALL DATABASE STATE & EXPECTED 26-TABLE INVENTORY
+  -- 1. OVERALL DATABASE STATE & EXPECTED 27-TABLE INVENTORY
   -- --------------------------------------------------------------------------
   SELECT count(*) INTO v_existing_count
   FROM pg_tables
@@ -67,14 +67,14 @@ BEGIN
       'public_schema'::text,
       'EMPTY_DATABASE_READY'::text,
       0::bigint,
-      '0 of 26 expected portal tables exist. Database is completely empty and ready for fresh execution of supabase/schema.sql.'::text;
+      '0 of 27 expected portal tables exist. Database is completely empty and ready for fresh execution of supabase/schema.sql.'::text;
   ELSE
     RETURN QUERY SELECT
       '01_DATABASE_STATE'::text,
       'public_schema'::text,
-      CASE WHEN v_existing_count = 26 THEN 'ALL_26_TABLES_PRESENT' ELSE 'PARTIAL_SCHEMA_DETECTED' END::text,
-      (26 - v_existing_count)::bigint,
-      format('%s of 26 expected portal tables currently exist.', v_existing_count);
+      CASE WHEN v_existing_count = 27 THEN 'ALL_27_TABLES_PRESENT' ELSE 'PARTIAL_SCHEMA_DETECTED' END::text,
+      (27 - v_existing_count)::bigint,
+      format('%s of 27 expected portal tables currently exist.', v_existing_count);
   END IF;
 
   FOREACH v_tbl IN ARRAY v_expected_tables
@@ -124,6 +124,7 @@ BEGIN
         ('cbt_exams','id'),('cbt_exams','subject_id'),('cbt_exams','class_id'),('cbt_exams','teacher_id'),('cbt_exams','start_date'),('cbt_exams','end_date'),('cbt_exams','questions'),('cbt_exams','created_at'),('cbt_exams','updated_at'),
         ('cbt_questions','id'),('cbt_questions','exam_id'),('cbt_questions','correct_option'),('cbt_questions','marks'),('cbt_questions','created_at'),('cbt_questions','updated_at'),
         ('cbt_attempts','id'),('cbt_attempts','exam_id'),('cbt_attempts','student_id'),('cbt_attempts','completed_at'),('cbt_attempts','answers'),('cbt_attempts','created_at'),('cbt_attempts','updated_at'),
+        ('cbt_exam_sessions','id'),('cbt_exam_sessions','exam_id'),('cbt_exam_sessions','student_id'),('cbt_exam_sessions','started_at'),('cbt_exam_sessions','expires_at'),('cbt_exam_sessions','status'),('cbt_exam_sessions','question_order'),('cbt_exam_sessions','created_at'),('cbt_exam_sessions','updated_at'),
         ('assignments','id'),('assignments','subject_id'),('assignments','class_id'),('assignments','teacher_id'),('assignments','due_date'),('assignments','created_date'),('assignments','created_at'),('assignments','updated_at'),
         ('assignment_submissions','id'),('assignment_submissions','assignment_id'),('assignment_submissions','student_id'),('assignment_submissions','created_at'),('assignment_submissions','updated_at'),
         ('study_notes','id'),('study_notes','subject_id'),('study_notes','class_id'),('study_notes','teacher_id'),('study_notes','upload_date'),('study_notes','created_at'),('study_notes','updated_at'),
@@ -224,6 +225,11 @@ BEGIN
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','cbt_attempts(exam_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_cbt_attempts_exam_student'; END IF;
   END IF;
 
+  IF pg_temp.has_table_cols('cbt_exam_sessions', ARRAY['exam_id','student_id']) THEN
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.cbt_exam_sessions GROUP BY exam_id, student_id HAVING count(*) > 1) d;
+    IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','cbt_exam_sessions(exam_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_cbt_exam_sessions_exam_student'; END IF;
+  END IF;
+
   IF pg_temp.has_table_cols('assignment_submissions', ARRAY['assignment_id','student_id']) THEN
     SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.assignment_submissions GROUP BY assignment_id, student_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','assignment_submissions(assignment_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_assignment_submissions_pair'; END IF;
@@ -305,6 +311,13 @@ BEGIN
     IF v_cnt > 0 THEN RETURN QUERY SELECT '05_ORPHAN_FK','cbt_attempts.exam_id -> cbt_exams.id','ORPHAN_FOUND',v_cnt,'Invalid exam ID in cbt_attempts'; END IF;
     SELECT count(*) INTO v_cnt FROM public.cbt_attempts ca LEFT JOIN public.students s ON s.id = ca.student_id WHERE s.id IS NULL;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '05_ORPHAN_FK','cbt_attempts.student_id -> students.id','ORPHAN_FOUND',v_cnt,'Invalid student ID in cbt_attempts'; END IF;
+  END IF;
+
+  IF pg_temp.has_table_cols('cbt_exam_sessions', ARRAY['exam_id','student_id']) AND pg_temp.has_table_cols('cbt_exams', ARRAY['id']) AND pg_temp.has_table_cols('students', ARRAY['id']) THEN
+    SELECT count(*) INTO v_cnt FROM public.cbt_exam_sessions ces LEFT JOIN public.cbt_exams ce ON ce.id = ces.exam_id WHERE ce.id IS NULL;
+    IF v_cnt > 0 THEN RETURN QUERY SELECT '05_ORPHAN_FK','cbt_exam_sessions.exam_id -> cbt_exams.id','ORPHAN_FOUND',v_cnt,'Invalid exam ID in cbt_exam_sessions'; END IF;
+    SELECT count(*) INTO v_cnt FROM public.cbt_exam_sessions ces LEFT JOIN public.students s ON s.id = ces.student_id WHERE s.id IS NULL;
+    IF v_cnt > 0 THEN RETURN QUERY SELECT '05_ORPHAN_FK','cbt_exam_sessions.student_id -> students.id','ORPHAN_FOUND',v_cnt,'Invalid student ID in cbt_exam_sessions'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('assignments', ARRAY['subject_id','class_id','teacher_id']) AND pg_temp.has_table_cols('subjects', ARRAY['id']) AND pg_temp.has_table_cols('classes', ARRAY['id']) AND pg_temp.has_table_cols('teachers', ARRAY['id']) THEN

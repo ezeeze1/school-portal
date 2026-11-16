@@ -3,7 +3,7 @@
 -- PRIORITY 3: POST-MIGRATION VERIFICATION SCRIPT (READ-ONLY / ROLLBACK SAFE)
 -- ============================================================================
 
--- 1. Verify all 26 expected portal tables exist and have RLS enabled
+-- 1. Verify all 27 expected portal tables exist and have RLS enabled
 WITH expected_tables(table_name) AS (
   VALUES
     ('academic_sessions'),
@@ -12,6 +12,7 @@ WITH expected_tables(table_name) AS (
     ('assignments'),
     ('attendance'),
     ('cbt_attempts'),
+    ('cbt_exam_sessions'),
     ('cbt_exams'),
     ('cbt_questions'),
     ('classes'),
@@ -76,7 +77,7 @@ ORDER BY ev.view_name;
 WITH expected_tables(table_name) AS (
   VALUES
     ('academic_sessions'),('announcements'),('assignment_submissions'),('assignments'),
-    ('attendance'),('cbt_attempts'),('cbt_exams'),('cbt_questions'),('classes'),
+    ('attendance'),('cbt_attempts'),('cbt_exam_sessions'),('cbt_exams'),('cbt_questions'),('classes'),
     ('download_documents'),('fee_records'),('gallery_images'),('news_items'),
     ('online_applications'),('parent_students'),('parents'),('scores'),
     ('student_result_passcodes'),('students'),('study_notes'),('subjects'),
@@ -152,6 +153,7 @@ WITH expected_indexes(index_name) AS (
     ('uq_parents_parent_id'),('uq_parents_email'),('uq_parents_auth_user'),
     ('uq_scores_student_subject_term'),('uq_terminal_results_student_term'),
     ('uq_attendance_student_date'),('uq_cbt_attempts_exam_student'),
+    ('uq_cbt_exam_sessions_exam_student'),
     ('uq_assignment_submissions_pair'),('uq_online_applications_number'),
     ('uq_fee_records_receipt'),('uq_fee_records_student_term'),
     ('idx_students_class_id'),('idx_students_parent_email'),
@@ -159,6 +161,7 @@ WITH expected_indexes(index_name) AS (
     ('idx_results_class_session_term'),('idx_attendance_class_date'),
     ('idx_cbt_exams_class_published'),('idx_cbt_exams_teacher_id'),
     ('idx_cbt_questions_exam_order'),('idx_cbt_attempts_student'),
+    ('idx_cbt_exam_sessions_student'),('idx_cbt_exam_sessions_status'),
     ('idx_assignments_class_due'),('idx_assignments_teacher_id'),
     ('idx_study_notes_class'),('idx_study_notes_teacher_id'),
     ('idx_announcements_date'),('idx_fee_records_student_status')
@@ -213,7 +216,7 @@ ORDER BY table_name, grantee;
 WITH expected_tables(table_name) AS (
   VALUES
     ('academic_sessions'),('announcements'),('assignment_submissions'),('assignments'),
-    ('attendance'),('cbt_attempts'),('cbt_exams'),('cbt_questions'),('classes'),
+    ('attendance'),('cbt_attempts'),('cbt_exam_sessions'),('cbt_exams'),('cbt_questions'),('classes'),
     ('download_documents'),('fee_records'),('gallery_images'),('news_items'),
     ('online_applications'),('parent_students'),('parents'),('scores'),
     ('student_result_passcodes'),('students'),('study_notes'),('subjects'),
@@ -232,7 +235,56 @@ LEFT JOIN pg_policies p
 GROUP BY et.table_name
 ORDER BY et.table_name;
 
--- 8. Safe anon access simulation (rolled back; modifies zero data)
+-- 8. Verify Priority 4 RPC execution privileges & security isolation
+WITH expected_rpcs(func_name, allow_anon, allow_authenticated, allow_service_role) AS (
+  VALUES
+    ('bootstrap_first_admin', false, false, true),
+    ('sync_my_user_profile', false, true, true),
+    ('verify_student_result_passcode', false, true, true),
+    ('get_student_cbt_exams', false, true, true),
+    ('start_cbt_exam', false, true, true),
+    ('submit_cbt_exam', false, true, true)
+)
+SELECT
+  er.func_name,
+  (p.oid IS NOT NULL) AS exists,
+  CASE WHEN p.oid IS NULL THEN false ELSE has_function_privilege('anon', p.oid, 'EXECUTE') END AS anon_exec,
+  CASE WHEN p.oid IS NULL THEN false ELSE has_function_privilege('authenticated', p.oid, 'EXECUTE') END AS auth_exec,
+  CASE WHEN p.oid IS NULL THEN false ELSE has_function_privilege('service_role', p.oid, 'EXECUTE') END AS service_exec,
+  CASE
+    WHEN p.oid IS NULL THEN 'MISSING_FUNCTION'
+    WHEN has_function_privilege('anon', p.oid, 'EXECUTE') <> er.allow_anon THEN 'ANON_GRANT_MISMATCH'
+    WHEN has_function_privilege('authenticated', p.oid, 'EXECUTE') <> er.allow_authenticated THEN 'AUTH_GRANT_MISMATCH'
+    WHEN has_function_privilege('service_role', p.oid, 'EXECUTE') <> er.allow_service_role THEN 'SERVICE_GRANT_MISMATCH'
+    ELSE 'OK'
+  END AS status
+FROM expected_rpcs er
+LEFT JOIN pg_proc p
+  ON p.pronamespace = 'public'::regnamespace
+ AND p.proname = er.func_name
+ORDER BY er.func_name;
+
+-- 9. Verify CBT answer-key lockdown, immutable attempts, & assignment submission checks
+SELECT
+  tablename,
+  policyname,
+  cmd,
+  CASE
+    WHEN tablename IN ('cbt_exams', 'cbt_questions') AND cmd IN ('SELECT', 'ALL') AND (qual ILIKE '%student%' OR with_check ILIKE '%student%')
+      THEN 'SECURITY_REGRESSION_STUDENT_CBT_READ'
+    WHEN tablename = 'cbt_attempts' AND cmd IN ('INSERT', 'UPDATE') AND (with_check ILIKE '%is_student_owner%' OR qual ILIKE '%is_student_owner%')
+      THEN 'SECURITY_REGRESSION_STUDENT_ATTEMPT_WRITE'
+    WHEN tablename = 'assignment_submissions' AND policyname = 'assignment_submissions_student_insert'
+      AND (with_check NOT ILIKE '%grade IS NULL%' OR with_check NOT ILIKE '%feedback IS NULL%')
+      THEN 'SECURITY_REGRESSION_GRADE_TAMPERING'
+    ELSE 'OK'
+  END AS security_audit
+FROM pg_policies
+WHERE schemaname = 'public'
+  AND tablename IN ('cbt_exams', 'cbt_questions', 'cbt_attempts', 'assignment_submissions', 'student_result_passcodes')
+ORDER BY tablename, policyname;
+
+-- 10. Safe anon access simulation (rolled back; modifies zero data)
 BEGIN;
 SET LOCAL ROLE anon;
 SELECT count(*) AS public_site_settings_ok FROM public.public_site_settings;

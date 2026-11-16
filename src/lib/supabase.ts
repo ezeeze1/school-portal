@@ -54,10 +54,9 @@ export const isSupabaseConfigured: boolean =
 export const supabase: SupabaseClient | null = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        // Preserves existing portal auth until Supabase Auth migration is planned
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false,
+        detectSessionInUrl: true,
       },
     })
   : null;
@@ -137,7 +136,7 @@ export async function checkSupabaseConnection(): Promise<SupabaseDiagnosticResul
 
   try {
     const { error, status } = await supabase
-      .from('system_settings')
+      .from('public_site_settings')
       .select('id')
       .limit(1);
 

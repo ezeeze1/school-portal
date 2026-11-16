@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
-import { BookOpen, Download, FileText, Calendar, CheckCircle2, Clock, Send, FileType, FileCode, Paperclip } from 'lucide-react';
+import { Download, FileText, CheckCircle2, Clock, Send, FileType, FileCode, AlertCircle, Award, ExternalLink } from 'lucide-react';
 
 export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) => {
-  const { assignments, studyNotes } = useSchool();
+  const { assignments, assignmentSubmissions, submitAssignmentAnswer, studyNotes } = useSchool();
   const [activeTab, setActiveTab] = useState<'assignments' | 'notes'>('assignments');
-  const [submittedTasks, setSubmittedTasks] = useState<Record<string, string>>({});
   const [submissionText, setSubmissionText] = useState('');
+  const [submissionFileUrl, setSubmissionFileUrl] = useState('');
   const [activeAsgId, setActiveAsgId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
   const studentAssignments = assignments.filter(
     (a) => a.classId === student.classId || a.className.includes(student.className) || student.className.includes(a.className)
@@ -18,10 +21,35 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
     (n) => !n.classId || n.classId === 'all' || n.classId === student.classId || n.className === 'All Classes' || n.className.includes(student.className) || student.className.includes(n.className)
   );
 
-  const handleSubmitHomework = (asgId: string) => {
-    setSubmittedTasks((prev) => ({ ...prev, [asgId]: submissionText || 'Answer submitted.' }));
-    setActiveAsgId(null);
-    setSubmissionText('');
+  const handleSubmitHomework = async (asgId: string) => {
+    if (!submissionText.trim() && !submissionFileUrl.trim()) {
+      setSubmitError('Please enter your homework answer or attach a completed file URL.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+    try {
+      const res = await submitAssignmentAnswer(
+        asgId,
+        submissionText.trim() || 'Submitted attachment.',
+        submissionFileUrl.trim() || undefined
+      );
+      if (!res.ok) {
+        setSubmitError(res.error || 'Failed to submit homework.');
+        return;
+      }
+      setActiveAsgId(null);
+      setSubmissionText('');
+      setSubmissionFileUrl('');
+      setSubmitSuccess('Homework answer submitted successfully.');
+      setTimeout(() => setSubmitSuccess(null), 4000);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to submit homework.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -60,10 +88,19 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
         </div>
       </div>
 
+      {submitSuccess && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 p-4 rounded-2xl text-xs font-bold flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>{submitSuccess}</span>
+        </div>
+      )}
+
       {activeTab === 'assignments' ? (
         <div className="space-y-6">
           {studentAssignments.map((asg) => {
-            const isDone = !!submittedTasks[asg.id];
+            const existingSubmission = assignmentSubmissions.find(
+              (sub) => sub.assignmentId === asg.id && sub.studentId === student.id
+            );
             const fmt = asg.format || 'text';
 
             return (
@@ -146,32 +183,82 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
                   </div>
                 )}
 
-                <div className="pt-2 flex items-center justify-between">
-                  {isDone ? (
-                    <div className="bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 p-3 rounded-2xl text-xs font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-2 w-full justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Homework Submitted
-                      </span>
-                      <span className="text-[10px] font-mono opacity-80">Answer logged</span>
+                <div className="pt-2">
+                  {existingSubmission ? (
+                    <div className="bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 p-4 rounded-2xl text-xs border border-emerald-200 dark:border-emerald-800 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 font-bold">
+                        <span className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Homework Submitted ({existingSubmission.submissionDate})
+                        </span>
+                        {existingSubmission.grade !== undefined && existingSubmission.grade !== null ? (
+                          <span className="bg-amber-500 text-slate-950 px-2.5 py-0.5 rounded-full text-[11px] font-black flex items-center gap-1">
+                            <Award className="w-3.5 h-3.5" /> Score: {existingSubmission.grade} / {asg.totalMarks || 20}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono opacity-80">Awaiting teacher grading</span>
+                        )}
+                      </div>
+
+                      <div className="bg-white/70 dark:bg-slate-900/60 p-3 rounded-xl border border-emerald-200/70 dark:border-emerald-900 text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+                        {existingSubmission.content}
+                      </div>
+
+                      {existingSubmission.fileUrl && (
+                        <a
+                          href={existingSubmission.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:underline"
+                        >
+                          <ExternalLink className="w-3 h-3" /> View Submitted Attachment
+                        </a>
+                      )}
+
+                      {existingSubmission.feedback && (
+                        <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200">
+                          <strong>Teacher Feedback:</strong> {existingSubmission.feedback}
+                        </div>
+                      )}
                     </div>
                   ) : activeAsgId === asg.id ? (
                     <div className="w-full space-y-3 pt-2">
+                      {submitError && (
+                        <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-bold flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                          <span>{submitError}</span>
+                        </div>
+                      )}
                       <textarea
                         rows={3}
                         value={submissionText}
-                        onChange={(e) => setSubmissionText(e.target.value)}
-                        placeholder="Type your homework answer or paste link to completed file here..."
+                        onChange={(e) => {
+                          setSubmissionText(e.target.value);
+                          setSubmitError(null);
+                        }}
+                        placeholder="Type your homework answer here..."
                         className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-amber-500"
+                      />
+                      <input
+                        type="url"
+                        value={submissionFileUrl}
+                        onChange={(e) => setSubmissionFileUrl(e.target.value)}
+                        placeholder="Optional link to completed file (e.g. Google Drive / Docs URL)"
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-amber-500"
                       />
                       <div className="flex gap-2">
                         <button
-                          onClick={() => handleSubmitHomework(asg.id)}
-                          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1 shadow-sm"
+                          disabled={isSubmitting}
+                          onClick={() => void handleSubmitHomework(asg.id)}
+                          className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1 shadow-sm"
                         >
-                          Submit Answer <Send className="w-3.5 h-3.5" />
+                          {isSubmitting ? 'Submitting...' : 'Submit Answer'} <Send className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => setActiveAsgId(null)}
+                          disabled={isSubmitting}
+                          onClick={() => {
+                            setActiveAsgId(null);
+                            setSubmitError(null);
+                          }}
                           className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-4 py-2 rounded-xl text-xs"
                         >
                           Cancel
@@ -180,7 +267,12 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
                     </div>
                   ) : (
                     <button
-                      onClick={() => setActiveAsgId(asg.id)}
+                      onClick={() => {
+                        setActiveAsgId(asg.id);
+                        setSubmissionText('');
+                        setSubmissionFileUrl('');
+                        setSubmitError(null);
+                      }}
                       className="bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 text-white dark:text-slate-950 font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-sm"
                     >
                       <Send className="w-3.5 h-3.5" /> Submit Homework Answer

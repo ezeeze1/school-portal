@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
-import { Award, Printer, Lock, Unlock, Key, ShieldCheck, AlertCircle, Sparkles, Copy, Check } from 'lucide-react';
+import { Award, Printer, Lock, Unlock, Key, ShieldCheck, AlertCircle } from 'lucide-react';
 import { ReportCardModal } from '../reports/ReportCardModal';
 
 export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
-  const { results, systemSettings, academicSessions } = useSchool();
+  const { results, systemSettings, academicSessions, verifyResultPasscode } = useSchool();
   const availableSessions = academicSessions && academicSessions.length > 0
     ? academicSessions
     : [systemSettings.currentSession];
@@ -21,7 +21,7 @@ export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
   const [unlockedSessions, setUnlockedSessions] = useState<Record<string, boolean>>({});
   const [passcodeInput, setPasscodeInput] = useState('');
   const [passcodeError, setPasscodeError] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const studentResult = results.find(
     (r) =>
@@ -32,32 +32,30 @@ export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
 
   const sessionKey = `${selectedSession}-${selectedTerm}`;
   const isUnlocked = unlockedSessions[sessionKey] || false;
-  const officialPasscode = (student.resultPasscode || 'RES-8K9M2P').trim().toUpperCase();
 
-  const handleVerifyPasscode = (e: React.FormEvent) => {
+  const handleVerifyPasscode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passcodeInput.trim().toUpperCase() === officialPasscode) {
-      setUnlockedSessions((prev) => ({ ...prev, [sessionKey]: true }));
-      setPasscodeError(false);
-      setPasscodeInput('');
-    } else {
+    if (!passcodeInput.trim() || isVerifying) return;
+    setIsVerifying(true);
+    setPasscodeError(false);
+    try {
+      const verified = await verifyResultPasscode(student.id, passcodeInput);
+      if (verified) {
+        setUnlockedSessions((prev) => ({ ...prev, [sessionKey]: true }));
+        setPasscodeError(false);
+        setPasscodeInput('');
+      } else {
+        setPasscodeError(true);
+      }
+    } catch {
       setPasscodeError(true);
+    } finally {
+      setIsVerifying(false);
     }
   };
 
   const handleLockSession = () => {
     setUnlockedSessions((prev) => ({ ...prev, [sessionKey]: false }));
-  };
-
-  const handleUseDemoCode = () => {
-    setPasscodeInput(officialPasscode);
-    setPasscodeError(false);
-  };
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(officialPasscode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -137,9 +135,9 @@ export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
                     setPasscodeInput(e.target.value.toUpperCase());
                     setPasscodeError(false);
                   }}
-                  placeholder="e.g. RES-8K9M2P"
+                  placeholder="Enter official passcode"
                   className="w-full text-center tracking-widest font-mono text-lg font-bold px-4 py-3 bg-slate-50 dark:bg-slate-800 border-2 border-slate-300 dark:border-slate-700 rounded-2xl text-slate-900 dark:text-white outline-none focus:border-amber-500 uppercase placeholder:text-slate-400 placeholder:tracking-normal placeholder:font-sans placeholder:text-sm"
-                  maxLength={12}
+                  maxLength={16}
                 />
               </div>
 
@@ -153,10 +151,11 @@ export const StudentResults: React.FC<{ student: Student }> = ({ student }) => {
 
             <button
               type="submit"
-              className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-3.5 px-6 rounded-2xl text-xs transition-colors flex items-center justify-center gap-2 shadow-lg shadow-amber-500/10"
+              disabled={isVerifying || !passcodeInput.trim()}
+              className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold py-3.5 px-6 rounded-2xl text-xs transition-colors flex items-center justify-center gap-2 shadow-lg shadow-amber-500/10"
             >
               <ShieldCheck className="w-4 h-4" />
-              Unlock Terminal Result
+              {isVerifying ? 'Verifying Passcode...' : 'Unlock Terminal Result'}
             </button>
           </form>
 
