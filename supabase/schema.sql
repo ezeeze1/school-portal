@@ -130,11 +130,11 @@ AS $$
 $$;
 
 -- ----------------------------------------------------------------------------
--- 3. TABLE CREATION (ALL 26 PORTAL TABLES IN DEPENDENCY ORDER)
+-- 3. TABLE CREATION (ALL 27 PORTAL TABLES IN DEPENDENCY ORDER)
 -- ----------------------------------------------------------------------------
--- 1/26: user_profiles (created in Section 2)
+-- 1/27: user_profiles (created in Section 2)
 
--- 2/26: academic_sessions
+-- 2/27: academic_sessions
 CREATE TABLE IF NOT EXISTS public.academic_sessions (
   name text PRIMARY KEY,
   is_current boolean NOT NULL DEFAULT false,
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS public.academic_sessions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 3/26: system_settings
+-- 3/27: system_settings
 CREATE TABLE IF NOT EXISTS public.system_settings (
   id text PRIMARY KEY,
   current_session text NOT NULL,
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 4/26: teachers
+-- 4/27: teachers
 CREATE TABLE IF NOT EXISTS public.teachers (
   id text PRIMARY KEY,
   auth_user_id uuid,
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS public.teachers (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 5/26: classes
+-- 5/27: classes
 CREATE TABLE IF NOT EXISTS public.classes (
   id text PRIMARY KEY,
   name text NOT NULL,
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS public.classes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 6/26: subjects
+-- 6/27: subjects
 CREATE TABLE IF NOT EXISTS public.subjects (
   id text PRIMARY KEY,
   code text NOT NULL,
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS public.subjects (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 7/26: students
+-- 7/27: students
 CREATE TABLE IF NOT EXISTS public.students (
   id text PRIMARY KEY,
   auth_user_id uuid,
@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS public.students (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 8/26: student_result_passcodes (depends on students)
+-- 8/27: student_result_passcodes (depends on students)
 CREATE TABLE IF NOT EXISTS public.student_result_passcodes (
   student_id text PRIMARY KEY REFERENCES public.students(id) ON DELETE CASCADE,
   result_passcode text NOT NULL,
@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS public.student_result_passcodes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 9/26: parents
+-- 9/27: parents
 CREATE TABLE IF NOT EXISTS public.parents (
   id text PRIMARY KEY,
   auth_user_id uuid,
@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS public.parents (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 10/26: parent_students
+-- 10/27: parent_students
 CREATE TABLE IF NOT EXISTS public.parent_students (
   parent_id text NOT NULL,
   student_id text NOT NULL,
@@ -290,7 +290,7 @@ CREATE TABLE IF NOT EXISTS public.parent_students (
   PRIMARY KEY (parent_id, student_id)
 );
 
--- 11/26: teacher_subjects
+-- 11/27: teacher_subjects
 CREATE TABLE IF NOT EXISTS public.teacher_subjects (
   teacher_id text NOT NULL,
   subject_id text NOT NULL,
@@ -299,7 +299,7 @@ CREATE TABLE IF NOT EXISTS public.teacher_subjects (
   PRIMARY KEY (teacher_id, subject_id)
 );
 
--- 12/26: scores
+-- 12/27: scores
 CREATE TABLE IF NOT EXISTS public.scores (
   id text PRIMARY KEY,
   student_id text NOT NULL,
@@ -319,7 +319,7 @@ CREATE TABLE IF NOT EXISTS public.scores (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 13/26: terminal_results
+-- 13/27: terminal_results
 CREATE TABLE IF NOT EXISTS public.terminal_results (
   id text PRIMARY KEY,
   student_id text NOT NULL,
@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS public.terminal_results (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 14/26: attendance
+-- 14/27: attendance
 CREATE TABLE IF NOT EXISTS public.attendance (
   id text PRIMARY KEY,
   student_id text NOT NULL,
@@ -358,7 +358,7 @@ CREATE TABLE IF NOT EXISTS public.attendance (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 15/26: cbt_exams
+-- 15/27: cbt_exams
 CREATE TABLE IF NOT EXISTS public.cbt_exams (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -383,7 +383,7 @@ CREATE TABLE IF NOT EXISTS public.cbt_exams (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 16/26: cbt_questions
+-- 16/27: cbt_questions
 CREATE TABLE IF NOT EXISTS public.cbt_questions (
   id text PRIMARY KEY,
   exam_id text NOT NULL,
@@ -432,7 +432,7 @@ CREATE TABLE IF NOT EXISTS public.cbt_exam_sessions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 18/26: assignments
+-- 19/27: assignments
 CREATE TABLE IF NOT EXISTS public.assignments (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -455,7 +455,7 @@ CREATE TABLE IF NOT EXISTS public.assignments (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 19/26: assignment_submissions
+-- 20/27: assignment_submissions
 CREATE TABLE IF NOT EXISTS public.assignment_submissions (
   id text PRIMARY KEY,
   assignment_id text NOT NULL,
@@ -470,7 +470,7 @@ CREATE TABLE IF NOT EXISTS public.assignment_submissions (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 20/26: study_notes
+-- 21/27: study_notes
 CREATE TABLE IF NOT EXISTS public.study_notes (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS public.study_notes (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 21/26: news_items
+-- 22/27: news_items
 CREATE TABLE IF NOT EXISTS public.news_items (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -504,7 +504,7 @@ CREATE TABLE IF NOT EXISTS public.news_items (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 22/26: gallery_images
+-- 23/27: gallery_images
 CREATE TABLE IF NOT EXISTS public.gallery_images (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -516,7 +516,7 @@ CREATE TABLE IF NOT EXISTS public.gallery_images (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 23/26: online_applications
+-- 24/27: online_applications
 CREATE TABLE IF NOT EXISTS public.online_applications (
   id text PRIMARY KEY,
   application_number text NOT NULL,
@@ -536,7 +536,7 @@ CREATE TABLE IF NOT EXISTS public.online_applications (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 24/26: download_documents
+-- 25/27: download_documents
 CREATE TABLE IF NOT EXISTS public.download_documents (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -549,7 +549,7 @@ CREATE TABLE IF NOT EXISTS public.download_documents (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 25/26: announcements
+-- 26/27: announcements
 CREATE TABLE IF NOT EXISTS public.announcements (
   id text PRIMARY KEY,
   title text NOT NULL,
@@ -563,7 +563,7 @@ CREATE TABLE IF NOT EXISTS public.announcements (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- 26/26: fee_records
+-- 27/27: fee_records
 CREATE TABLE IF NOT EXISTS public.fee_records (
   id text PRIMARY KEY,
   student_id text NOT NULL,
@@ -970,6 +970,7 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_classes_name ON public.classes (name);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subjects_code ON public.subjects (code);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_students_admission_no ON public.students (admission_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_students_email ON public.students (lower(email)) WHERE email IS NOT NULL AND trim(email) <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS uq_students_auth_user ON public.students (auth_user_id) WHERE auth_user_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_staff_id ON public.teachers (staff_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_email ON public.teachers (lower(email));
@@ -1029,6 +1030,256 @@ BEGIN
     );
   END LOOP;
 END $$;
+
+-- ----------------------------------------------------------------------------
+-- 8b. RUNTIME INTEGRITY & SYNC TRIGGERS (JUNCTION TABLES + CBT PROTECTION)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.sync_parent_students_from_parent()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF jsonb_typeof(NEW.student_ids) = 'array' THEN
+    INSERT INTO public.parent_students (parent_id, student_id)
+    SELECT DISTINCT NEW.id, elem.student_id
+    FROM jsonb_array_elements_text(NEW.student_ids) AS elem(student_id)
+    JOIN public.students s ON s.id = elem.student_id
+    WHERE trim(elem.student_id) <> ''
+    ON CONFLICT (parent_id, student_id) DO NOTHING;
+  END IF;
+
+  IF NEW.email IS NOT NULL AND trim(NEW.email) <> '' THEN
+    INSERT INTO public.parent_students (parent_id, student_id)
+    SELECT DISTINCT NEW.id, s.id
+    FROM public.students s
+    WHERE s.parent_email IS NOT NULL
+      AND trim(s.parent_email) <> ''
+      AND lower(trim(s.parent_email)) = lower(trim(NEW.email))
+    ON CONFLICT (parent_id, student_id) DO NOTHING;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_parents_sync_parent_students ON public.parents;
+CREATE TRIGGER trg_parents_sync_parent_students
+  AFTER INSERT OR UPDATE OF student_ids, email ON public.parents
+  FOR EACH ROW EXECUTE FUNCTION public.sync_parent_students_from_parent();
+
+CREATE OR REPLACE FUNCTION public.sync_parent_students_from_student()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.parent_email IS NOT NULL AND trim(NEW.parent_email) <> '' THEN
+    INSERT INTO public.parent_students (parent_id, student_id)
+    SELECT DISTINCT p.id, NEW.id
+    FROM public.parents p
+    WHERE lower(trim(p.email)) = lower(trim(NEW.parent_email))
+    ON CONFLICT (parent_id, student_id) DO NOTHING;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_students_sync_parent_students ON public.students;
+CREATE TRIGGER trg_students_sync_parent_students
+  AFTER INSERT OR UPDATE OF parent_email ON public.students
+  FOR EACH ROW EXECUTE FUNCTION public.sync_parent_students_from_student();
+
+CREATE OR REPLACE FUNCTION public.sync_teacher_subjects_from_teacher()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF jsonb_typeof(NEW.subject_ids) = 'array' THEN
+    INSERT INTO public.teacher_subjects (teacher_id, subject_id)
+    SELECT DISTINCT NEW.id, elem.subject_id
+    FROM jsonb_array_elements_text(NEW.subject_ids) AS elem(subject_id)
+    JOIN public.subjects sb ON sb.id = elem.subject_id
+    WHERE trim(elem.subject_id) <> ''
+    ON CONFLICT (teacher_id, subject_id) DO NOTHING;
+  END IF;
+
+  IF jsonb_typeof(NEW.subjects_taught) = 'array' THEN
+    INSERT INTO public.teacher_subjects (teacher_id, subject_id)
+    SELECT DISTINCT NEW.id, sb.id
+    FROM jsonb_array_elements_text(NEW.subjects_taught) AS elem(subject_name)
+    JOIN public.subjects sb ON lower(trim(sb.name)) = lower(trim(elem.subject_name))
+    WHERE trim(elem.subject_name) <> ''
+    ON CONFLICT (teacher_id, subject_id) DO NOTHING;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_teachers_sync_teacher_subjects ON public.teachers;
+CREATE TRIGGER trg_teachers_sync_teacher_subjects
+  AFTER INSERT OR UPDATE OF subject_ids, subjects_taught ON public.teachers
+  FOR EACH ROW EXECUTE FUNCTION public.sync_teacher_subjects_from_teacher();
+
+CREATE OR REPLACE FUNCTION public.guard_cbt_exam_active_session()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.cbt_exam_sessions ces
+    WHERE ces.exam_id = OLD.id
+      AND ces.status = 'in_progress'
+      AND ces.expires_at > now()
+  ) THEN
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'Cannot delete CBT exam "%" while a student has an active in-progress session.', OLD.id;
+    END IF;
+
+    IF NEW.questions IS DISTINCT FROM OLD.questions
+       OR NEW.total_marks IS DISTINCT FROM OLD.total_marks
+       OR NEW.duration_minutes IS DISTINCT FROM OLD.duration_minutes
+       OR NEW.pass_percentage IS DISTINCT FROM OLD.pass_percentage
+       OR NEW.class_id IS DISTINCT FROM OLD.class_id
+       OR NEW.is_published IS DISTINCT FROM OLD.is_published THEN
+      RAISE EXCEPTION 'Cannot modify CBT exam questions, marks, duration, class, or publish status while a student has an active in-progress session.';
+    END IF;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cbt_exams_guard_active_session ON public.cbt_exams;
+CREATE TRIGGER trg_cbt_exams_guard_active_session
+  BEFORE UPDATE OR DELETE ON public.cbt_exams
+  FOR EACH ROW EXECUTE FUNCTION public.guard_cbt_exam_active_session();
+
+CREATE OR REPLACE FUNCTION public.guard_cbt_question_active_session()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_exam_id text := COALESCE(NEW.exam_id, OLD.exam_id);
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.cbt_exam_sessions ces
+    WHERE ces.exam_id = v_exam_id
+      AND ces.status = 'in_progress'
+      AND ces.expires_at > now()
+  ) THEN
+    RAISE EXCEPTION 'Cannot modify CBT questions while a student has an active in-progress session for exam "%".', v_exam_id;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cbt_questions_guard_active_session ON public.cbt_questions;
+CREATE TRIGGER trg_cbt_questions_guard_active_session
+  BEFORE INSERT OR UPDATE OR DELETE ON public.cbt_questions
+  FOR EACH ROW EXECUTE FUNCTION public.guard_cbt_question_active_session();
+
+CREATE OR REPLACE FUNCTION public.sync_cbt_questions_from_exam()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_active_ids text[] := ARRAY[]::text[];
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+
+  IF jsonb_typeof(NEW.questions) <> 'array' THEN
+    DELETE FROM public.cbt_questions WHERE exam_id = NEW.id;
+    RETURN NEW;
+  END IF;
+
+  SELECT COALESCE(
+    array_agg(COALESCE(NULLIF(trim(q.val->>'id'), ''), NEW.id || '-q-' || q.ord::text)),
+    ARRAY[]::text[]
+  )
+  INTO v_active_ids
+  FROM jsonb_array_elements(NEW.questions) WITH ORDINALITY AS q(val, ord)
+  WHERE jsonb_typeof(q.val) = 'object';
+
+  DELETE FROM public.cbt_questions
+  WHERE exam_id = NEW.id
+    AND NOT (id = ANY(v_active_ids));
+
+  INSERT INTO public.cbt_questions (
+    id, exam_id, question_order, question, option_a, option_b, option_c, option_d,
+    correct_option, explanation, marks
+  )
+  SELECT
+    COALESCE(NULLIF(trim(q.val->>'id'), ''), NEW.id || '-q-' || q.ord::text),
+    NEW.id,
+    q.ord::integer,
+    COALESCE(q.val->>'question', ''),
+    CASE WHEN jsonb_typeof(q.val->'options') = 'object' THEN COALESCE(q.val->'options'->>'A', '') ELSE '' END,
+    CASE WHEN jsonb_typeof(q.val->'options') = 'object' THEN COALESCE(q.val->'options'->>'B', '') ELSE '' END,
+    CASE WHEN jsonb_typeof(q.val->'options') = 'object' THEN COALESCE(q.val->'options'->>'C', '') ELSE '' END,
+    CASE WHEN jsonb_typeof(q.val->'options') = 'object' THEN COALESCE(q.val->'options'->>'D', '') ELSE '' END,
+    CASE
+      WHEN upper(COALESCE(q.val->>'correctOption', 'A')) IN ('A', 'B', 'C', 'D')
+        THEN upper(q.val->>'correctOption')
+      ELSE 'A'
+    END,
+    q.val->>'explanation',
+    CASE
+      WHEN COALESCE(trim(q.val->>'marks'), '') ~ '^\d+(\.\d+)?$'
+        THEN GREATEST((q.val->>'marks')::numeric, 1)
+      ELSE 1
+    END
+  FROM jsonb_array_elements(NEW.questions) WITH ORDINALITY AS q(val, ord)
+  WHERE jsonb_typeof(q.val) = 'object'
+  ON CONFLICT (id) DO UPDATE
+    SET question_order = EXCLUDED.question_order,
+        question = EXCLUDED.question,
+        option_a = EXCLUDED.option_a,
+        option_b = EXCLUDED.option_b,
+        option_c = EXCLUDED.option_c,
+        option_d = EXCLUDED.option_d,
+        correct_option = EXCLUDED.correct_option,
+        explanation = EXCLUDED.explanation,
+        marks = EXCLUDED.marks,
+        updated_at = now()
+    WHERE public.cbt_questions.exam_id = EXCLUDED.exam_id;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cbt_exams_sync_questions ON public.cbt_exams;
+CREATE TRIGGER trg_cbt_exams_sync_questions
+  AFTER INSERT OR UPDATE OF questions ON public.cbt_exams
+  FOR EACH ROW EXECUTE FUNCTION public.sync_cbt_questions_from_exam();
 
 -- ----------------------------------------------------------------------------
 -- 9. SAFE PUBLIC & NON-SECRET PROJECTION VIEWS
@@ -1127,6 +1378,7 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.teachers t
+    LEFT JOIN public.subjects sb ON sb.id = target_subject_id
     WHERE t.auth_user_id = auth.uid()
       AND COALESCE(t.status, 'Active') = 'Active'
       AND (
@@ -1135,6 +1387,15 @@ AS $$
           WHERE ts.teacher_id = t.id AND ts.subject_id = target_subject_id
         )
         OR (jsonb_typeof(t.subject_ids) = 'array' AND t.subject_ids ? target_subject_id)
+        OR (
+          sb.id IS NOT NULL
+          AND jsonb_typeof(t.subjects_taught) = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(t.subjects_taught) AS elem(val)
+            WHERE lower(trim(elem.val)) = lower(trim(sb.name))
+          )
+        )
       )
   );
 $$;
@@ -1175,10 +1436,31 @@ AS $$
       AND (
         c.class_teacher_id = t.id
         OR t.form_class_id = target_class_id
-        OR t.class_taught = c.name
+        OR lower(trim(COALESCE(t.class_taught, ''))) = lower(trim(c.name))
+        OR EXISTS (
+          SELECT 1
+          FROM regexp_split_to_table(COALESCE(t.class_taught, ''), '\s*,\s*') AS tok(val)
+          WHERE trim(tok.val) <> ''
+            AND (
+              lower(trim(tok.val)) = lower(trim(c.name))
+              OR lower(trim(tok.val)) LIKE lower(trim(c.name)) || ' %'
+            )
+        )
         OR (
           jsonb_typeof(t.classes_taught) = 'array'
-          AND (t.classes_taught ? c.name OR t.classes_taught ? c.id)
+          AND (
+            t.classes_taught ? c.name
+            OR t.classes_taught ? c.id
+            OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(t.classes_taught) AS elem(val)
+              WHERE trim(elem.val) <> ''
+                AND (
+                  lower(trim(elem.val)) = lower(trim(c.name))
+                  OR lower(trim(elem.val)) LIKE lower(trim(c.name)) || ' %'
+                )
+            )
+          )
         )
       )
   );
@@ -1538,6 +1820,8 @@ BEGIN
     RAISE EXCEPTION 'Only enrolled students can start a CBT examination.';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtext('cbt:' || p_exam_id || ':' || v_student.id));
+
   IF v_student.status <> 'Active' THEN
     RAISE EXCEPTION 'Your student account status (%) is not eligible for CBT examinations.', v_student.status;
   END IF;
@@ -1759,6 +2043,8 @@ BEGIN
     RAISE EXCEPTION 'Only enrolled students can submit CBT examinations.';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtext('cbt:' || p_exam_id || ':' || v_student.id));
+
   SELECT * INTO v_exam
   FROM public.cbt_exams ce
   WHERE ce.id = p_exam_id
@@ -1886,7 +2172,7 @@ BEGIN
     v_total_marks := GREATEST(v_exam.total_marks, 1);
   END IF;
 
-  v_percentage := round((v_score / v_total_marks) * 100.0, 2);
+  v_percentage := LEAST(100, GREATEST(0, round((v_score / v_total_marks) * 100.0, 2)));
   v_passed := v_percentage >= COALESCE(v_exam.pass_percentage, 50);
   v_attempt_id := 'attmpt-' || substr(md5(p_exam_id || ':' || v_student.id || ':' || now()::text), 1, 16);
 
@@ -2010,6 +2296,12 @@ GRANT SELECT ON public.teachers_safe TO authenticated;
 
 -- Explicit function execution grants
 REVOKE ALL ON FUNCTION public.set_updated_at() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.sync_parent_students_from_parent() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.sync_parent_students_from_student() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.sync_teacher_subjects_from_teacher() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.guard_cbt_exam_active_session() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.guard_cbt_question_active_session() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.sync_cbt_questions_from_exam() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.bootstrap_first_admin(text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.bootstrap_first_admin(text, text) TO service_role;
 
@@ -2501,8 +2793,12 @@ CREATE POLICY "study_notes_scoped_select"
       AND (public.is_own_teacher_id(teacher_id) OR class_id IS NULL OR public.teacher_assigned_to_class(class_id))
     )
     OR (
-      public.current_app_role() IN ('student', 'parent')
+      public.current_app_role() = 'student'
       AND (class_id IS NULL OR public.student_in_class(class_id))
+    )
+    OR (
+      public.current_app_role() = 'parent'
+      AND (class_id IS NULL OR public.parent_has_ward_in_class(class_id))
     )
   );
 CREATE POLICY "admin_manage_study_notes"

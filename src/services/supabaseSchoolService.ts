@@ -1131,6 +1131,27 @@ export const supabaseSchoolService = {
   upsertDownloadDocument: (doc: DownloadDocument) =>
     safeUpsert('download_documents', toDownloadRow(doc)),
 
+  insertApplication: async (app: OnlineApplication): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const row = {
+        ...toApplicationRow(app),
+        status: 'Pending' as const,
+        notes: null,
+      };
+      const { error } = await supabase.from('online_applications').insert(row);
+      if (error) {
+        console.warn(`[Supabase] Insert error on "online_applications": ${error.message}`);
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.warn('[Supabase] Insert exception on "online_applications":', err);
+      return { ok: false, error: msg };
+    }
+  },
+
   upsertApplication: (app: OnlineApplication) =>
     safeUpsert('online_applications', toApplicationRow(app)),
 

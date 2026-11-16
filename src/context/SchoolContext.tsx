@@ -1329,7 +1329,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       status: 'Pending',
     };
     setApplications((prev) => [newApp, ...prev]);
-    void supabaseSchoolService.upsertApplication(newApp);
+    void supabaseSchoolService.insertApplication(newApp);
     return appNum;
   };
 

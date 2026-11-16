@@ -148,7 +148,7 @@ ORDER BY src.relname, con.conname, k.ord;
 WITH expected_indexes(index_name) AS (
   VALUES
     ('idx_user_profiles_role_ref'),
-    ('uq_classes_name'),('uq_subjects_code'),('uq_students_admission_no'),('uq_students_auth_user'),
+    ('uq_classes_name'),('uq_subjects_code'),('uq_students_admission_no'),('uq_students_email'),('uq_students_auth_user'),
     ('uq_teachers_staff_id'),('uq_teachers_email'),('uq_teachers_auth_user'),
     ('uq_parents_parent_id'),('uq_parents_email'),('uq_parents_auth_user'),
     ('uq_scores_student_subject_term'),('uq_terminal_results_student_term'),
@@ -284,7 +284,32 @@ WHERE schemaname = 'public'
   AND tablename IN ('cbt_exams', 'cbt_questions', 'cbt_attempts', 'assignment_submissions', 'student_result_passcodes')
 ORDER BY tablename, policyname;
 
--- 10. Safe anon access simulation (rolled back; modifies zero data)
+-- 10. Verify runtime sync & CBT active-session guard triggers exist
+WITH expected_triggers(table_name, trigger_name) AS (
+  VALUES
+    ('parents', 'trg_parents_sync_parent_students'),
+    ('students', 'trg_students_sync_parent_students'),
+    ('teachers', 'trg_teachers_sync_teacher_subjects'),
+    ('cbt_exams', 'trg_cbt_exams_guard_active_session'),
+    ('cbt_exams', 'trg_cbt_exams_sync_questions'),
+    ('cbt_questions', 'trg_cbt_questions_guard_active_session')
+)
+SELECT
+  et.table_name,
+  et.trigger_name,
+  (trg.oid IS NOT NULL) AS exists,
+  CASE WHEN trg.oid IS NULL THEN 'MISSING_TRIGGER' ELSE 'OK' END AS status
+FROM expected_triggers et
+LEFT JOIN pg_class cls
+  ON cls.relnamespace = 'public'::regnamespace
+ AND cls.relname = et.table_name
+LEFT JOIN pg_trigger trg
+  ON trg.tgrelid = cls.oid
+ AND trg.tgname = et.trigger_name
+ AND NOT trg.tgisinternal
+ORDER BY et.table_name, et.trigger_name;
+
+-- 11. Safe anon access simulation (rolled back; modifies zero data)
 BEGIN;
 SET LOCAL ROLE anon;
 SELECT count(*) AS public_site_settings_ok FROM public.public_site_settings;
