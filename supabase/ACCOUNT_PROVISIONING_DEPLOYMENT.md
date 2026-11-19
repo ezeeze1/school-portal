@@ -4,16 +4,20 @@ This guide covers deploying the secure server-side account provisioning workflow
 
 ---
 
-## 1. Single Minimal Additive SQL Migration (Review & Execute in Supabase SQL Editor)
+## 1. Additive SQL Migrations (Review & Execute Manually in Supabase SQL Editor)
 
-Review and run the single non-destructive, idempotent SQL migration file in **Supabase Dashboard -> SQL Editor**:
+Review and run these non-destructive, idempotent SQL migration files in **Supabase Dashboard -> SQL Editor**:
 
-- `supabase/migrations/20260501_account_provisioning.sql`
-  - Adds additive metadata columns on `public.user_profiles` (`account_status`, `must_change_password`, `invited_at`, `activated_at`).
-  - Adds uniqueness guards (`uq_user_profiles_role_reference`, `uq_user_profiles_email_lower`, and `uq_students_admission_no_normalized` on `public.students (lower(trim(admission_no)))`).
-  - Installs least-privilege RPCs (`get_admin_account_statuses`, `get_my_account_security_state`, `complete_my_password_setup`).
+1. `supabase/migrations/20260501_account_provisioning.sql` (Optional / recommended for status metadata & uniqueness guards):
+   - Adds additive metadata columns on `public.user_profiles` (`account_status`, `must_change_password`, `invited_at`, `activated_at`).
+   - Adds uniqueness guards (`uq_user_profiles_role_reference`, `uq_user_profiles_email_lower`, and `uq_students_admission_no_normalized` on `public.students (lower(trim(admission_no)))`).
+   - Installs least-privilege RPCs (`get_admin_account_statuses`, `get_my_account_security_state`, `complete_my_password_setup`).
+2. `supabase/migrations/20260502_student_login_rate_limits.sql` (Recommended for persistent cross-instance atomic rate limiting):
+   - Creates `public.student_login_rate_limits` (RLS enabled, `service_role`-only, stores SHA-256 hashed bucket keys only — zero plaintext IPs or admission numbers).
+   - Installs atomic row-locked RPCs (`consume_student_login_attempt`, `clear_student_login_rate_limit`, `release_student_login_attempt`, `prune_student_login_rate_limits`) granted exclusively to `service_role`.
+   - `student-auth-login` automatically uses these atomic PostgreSQL RPCs once applied, and safely falls back to a bounded in-memory sliding-window limiter beforehand.
 
-> Preserves all 27 existing tables and all 74 existing RLS policies — creates zero extra tables and does not alter, drop, or reset any existing records.
+> Neither migration drops, alters, or weakens any of the 27 existing portal tables, 74 existing RLS policies, student records, or administrator accounts.
 
 ---
 
@@ -24,12 +28,12 @@ Two server-side Edge Functions power account creation and student Admission Numb
 1. **`admin-account-provisioning`** (`supabase/functions/admin-account-provisioning`) — Administrator-only creation of student, teacher, and parent login accounts, password assignment, account status checks, and disable/reactivate controls.
 2. **`student-auth-login`** (`supabase/functions/student-auth-login`) — Required companion function for **Student Admission Number + Password** sign-in (with server-side rate limiting and anti-enumeration responses).
 
-### Option A: Deploy via Supabase CLI (Recommended)
+### Option A: Deploy via Supabase CLI
 
-Because both functions import shared TypeScript modules from `supabase/functions/_shared/` (`cors.ts`, `provisioningCore.ts`, `studentLoginCore.ts`), the Supabase CLI bundles everything automatically in two commands:
+Run from the project root:
 
 ```bash
-# 1. Authenticate and link your Supabase project (run from the project root)
+# 1. Authenticate and link your Supabase project
 npx supabase login
 npx supabase link --project-ref <YOUR_PROJECT_REF>
 
@@ -45,17 +49,15 @@ npx supabase functions deploy student-auth-login --no-verify-jwt
 
 ### Option B: Deploy via Supabase Dashboard (Web Editor)
 
-Because the Dashboard web editor uploads files per function folder rather than automatically resolving `../_shared/`:
+Both Edge Functions are self-contained single-file `index.ts` modules with zero local shared imports:
 
 1. Open **Supabase Dashboard -> Edge Functions -> Deploy a new function -> Via Editor**.
 2. Create function **`admin-account-provisioning`**:
-   - Add files `index.ts` (from `supabase/functions/admin-account-provisioning/index.ts`), `cors.ts` (from `supabase/functions/_shared/cors.ts`), and `provisioningCore.ts` (from `supabase/functions/_shared/provisioningCore.ts`) in the function's editor folder.
-   - In the Dashboard copy of `index.ts`, change `../_shared/cors.ts` to `./cors.ts` and `../_shared/provisioningCore.ts` to `./provisioningCore.ts`.
+   - Paste `supabase/functions/admin-account-provisioning/index.ts` directly into `index.ts`.
    - Click **Deploy function**.
-3. Create function **`student-auth-login`**:
-   - Add files `index.ts` (from `supabase/functions/student-auth-login/index.ts`), `cors.ts` (from `supabase/functions/_shared/cors.ts`), and `studentLoginCore.ts` (from `supabase/functions/_shared/studentLoginCore.ts`) in the function's editor folder.
-   - In the Dashboard copy of `index.ts`, change `../_shared/cors.ts` to `./cors.ts` and `../_shared/studentLoginCore.ts` to `./studentLoginCore.ts`.
-   - Under function **Details / Settings**, disable **Enforce JWT Verification / Verify JWT with legacy secret** (required so students can call it before signing in).
+3. Create function **`student-auth-login`** (required for Student Admission Number + Password login):
+   - Paste `supabase/functions/student-auth-login/index.ts` directly into `index.ts`.
+   - Under function **Details / Settings**, disable **Verify JWT with legacy secret / Enforce JWT Verification** (required because unauthenticated students call it before signing in).
    - Click **Deploy function**.
 
 ### Edge Function Secrets & Environment Configuration
