@@ -1,43 +1,42 @@
-# Divine Academy Portal — Account Provisioning Deployment & Configuration Guide
+# Divine Academy Portal — Account Provisioning & Student Admission-Number Auth Deployment Guide
 
-This guide covers deploying the secure server-side account provisioning workflow for **Students**, **Teachers**, and **Parents** without modifying any of the existing 27 tables or 74 RLS policies.
-
----
-
-## 1. Optional Minimal Additive SQL Migration (Recommended)
-
-Review and run `supabase/migrations/20260501_account_provisioning.sql` in **Supabase Dashboard -> SQL Editor**.
-
-What it adds (non-destructive, idempotent):
-- Additive columns on `public.user_profiles`: `account_status`, `must_change_password`, `invited_at`, `activated_at`.
-- Uniqueness guards on `public.user_profiles`: `uq_user_profiles_role_reference` and `uq_user_profiles_email_lower`.
-- Three least-privilege RPCs:
-  - `public.get_admin_account_statuses()` (Admin-only authoritative status query joining `user_profiles` + `auth.users`).
-  - `public.get_my_account_security_state()` (Self-service check for mandatory first-login password setup).
-  - `public.complete_my_password_setup()` (Clears `must_change_password` after user sets their personal password).
+This guide covers deploying the secure server-side account provisioning workflow and **Student Admission Number + Password** login for **Students**, **Teachers**, and **Parents** without modifying `supabase/schema.sql` or weakening any of the existing 27 tables or 74 RLS policies.
 
 ---
 
-## 2. Deploy the Supabase Edge Function
+## 1. Single Minimal Additive SQL Migration (Review & Execute in Supabase SQL Editor)
 
-The Edge Function `supabase/functions/admin-account-provisioning/index.ts` handles all privileged Supabase Admin Auth operations strictly on the server so the service-role key is never exposed to browsers and the administrator's session is never disrupted.
+Review and run the single non-destructive, idempotent SQL migration file in **Supabase Dashboard -> SQL Editor**:
 
-Using the Supabase CLI:
+- `supabase/migrations/20260501_account_provisioning.sql`
+  - Adds additive metadata columns on `public.user_profiles` (`account_status`, `must_change_password`, `invited_at`, `activated_at`).
+  - Adds uniqueness guards (`uq_user_profiles_role_reference`, `uq_user_profiles_email_lower`, and `uq_students_admission_no_normalized` on `public.students (lower(trim(admission_no)))`).
+  - Installs least-privilege RPCs (`get_admin_account_statuses`, `get_my_account_security_state`, `complete_my_password_setup`).
+
+> Preserves all 27 existing tables and all 74 existing RLS policies — creates zero extra tables and does not alter, drop, or reset any existing records.
+
+---
+
+## 2. Deploy Both Supabase Edge Functions
+
+Deploy both Edge Functions using the Supabase CLI:
 
 ```bash
-# 1. Link your local repository to your Supabase project
+# 1. Authenticate and link your Supabase project
 supabase login
 supabase link --project-ref <YOUR_PROJECT_REF>
 
-# 2. Deploy the Edge Function
+# 2. Deploy the admin-only account provisioning function (JWT verification ENABLED)
 supabase functions deploy admin-account-provisioning
+
+# 3. Deploy the student Admission Number sign-in function (JWT verification DISABLED because students call it before signing in)
+supabase functions deploy student-auth-login --no-verify-jwt
 ```
 
-### Automatic & Optional Edge Function Secrets
-
-Supabase automatically injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into deployed Edge Functions. Do **not** add `SUPABASE_SERVICE_ROLE_KEY` to `.env.local`, Vite, or Vercel frontend variables.
-
-Optional origin lockdown secrets (recommended for production):
+### Edge Function Secrets & Security
+- Supabase automatically injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into deployed Edge Functions.
+- **Never** add `SUPABASE_SERVICE_ROLE_KEY` to `.env`, `.env.local`, Vite, or Vercel frontend environment variables.
+- Recommended production origin lockdown secrets:
 
 ```bash
 supabase secrets set ALLOWED_ORIGIN="https://your-school-portal-domain.com"
@@ -46,37 +45,52 @@ supabase secrets set ALLOWED_REDIRECT_ORIGINS="https://your-school-portal-domain
 
 ---
 
-## 3. Required Supabase Authentication Dashboard Configuration
+## 3. Supabase Authentication Dashboard Configuration
 
 In **Supabase Dashboard -> Authentication**:
 
 1. **URL Configuration**:
    - **Site URL**: Set to your live portal origin (e.g., `https://your-school-portal-domain.com` or `http://localhost:3000` for local testing).
-   - **Redirect URLs**: Add your production domain, Vercel preview domain (if used), and local dev origin (`http://localhost:3000`).
-2. **Email Provider / SMTP**:
-   - Enable **Email** provider under **Authentication -> Providers -> Email**.
-   - For production invitation and password reset emails beyond Supabase's built-in rate limits, configure a verified custom SMTP provider under **Project Settings -> Authentication -> SMTP Settings** (e.g., Resend, Postmark, Brevo, or Google Workspace SMTP).
-3. **Email Templates**:
-   - Review **Invite user** and **Reset password** templates under **Authentication -> Email Templates** so redirect links point to `{{ .SiteURL }}`.
-4. **Disable Public Self-Signup (Recommended for School Portals)**:
-   - Under **Authentication -> Providers -> Email**, keep public self-registration disabled if only administrators should provision accounts. Admin-initiated `inviteUserByEmail` and `admin.createUser` continue to work via the Edge Function.
+   - **Redirect URLs**: Add your production domain, preview domain (if used), and local dev origin (`http://localhost:3000`).
+2. **Disable Public Self-Signup (Required for School Portal Security)**:
+   - Under **Authentication -> Providers -> Email**, keep public self-registration disabled so students, staff, and parents cannot self-register. Admin-initiated provisioning via `admin-account-provisioning` continues to operate normally.
+3. **Email Provider / SMTP (for Teacher/Parent Setup Invites)**:
+   - Keep **Email** provider enabled. If using setup invitation emails for teachers or parents in production, configure a verified custom SMTP provider under **Project Settings -> Authentication -> SMTP Settings**.
 
 ---
 
-## 4. Login Identifier Policy & Future Admission-Number Login Architecture
+## 4. Login Identifier & Authentication Architecture
 
-### Current Implemented Policy (Recommended & Active)
-- Every student, teacher, and parent login account requires a **valid, unique email address** managed by Supabase Authentication (`auth.users`).
-- No fake or synthetic email addresses are ever fabricated for students.
-- Student records may be enrolled first without an email (`Account not created`) and provisioned later via **Create Login Account** once an approved email address is available.
+| Portal Role | Login Identifier | Password Management |
+| :--- | :--- | :--- |
+| **Student** | **Admission Number** (e.g. `STD/2026/0001`) + Password | Assigned by an authenticated Administrator during registration or via **Manage Access & Password**. Personal email is **not** required for student login. |
+| **Teacher / Staff** | **Official Email Address** + Password | Assigned by an authenticated Administrator (initial password or setup invite). Signed-in teachers can also update their own password anytime via **Teacher Portal -> Account Security**. |
+| **Parent / Guardian** | **Registered Email Address** + Password | Assigned by an authenticated Administrator (initial password or setup invite). Strictly scoped to explicitly linked children in `public.parent_students`. |
+| **Administrator** | **Administrator Email Address** + Password | Managed by existing Supabase Auth admin identity (`public.user_profiles.role = 'admin'`). Signed-in administrators can rotate their password via **Admin Portal -> System Settings**. |
 
-### Documented Server-Side Design for Optional Admission-Number Login (If Needed Later)
-If Divine Academy later decides students should type their **Admission Number** (e.g., `STD/2026/1042`) on the login form instead of an email address, follow this secure architecture rather than fabricating unverified emails:
+### How Student Admission Number Sign-In Works Safely
+1. When an administrator provisions a student account, `admin-account-provisioning` creates the student's Supabase Auth identity using a deterministic non-deliverable internal identifier (`std.<recordId>@students.divineacademy.internal`) stored **only** in `auth.users` and `public.user_profiles` — never written to `public.students.email` and never exposed in the UI.
+2. When a student enters their **Admission Number + Password** in the portal login modal, the client calls the `student-auth-login` Edge Function.
+3. `student-auth-login` enforces rate limits per normalized Admission Number (5 failed attempts per 15 minutes) and per client IP (20 failed attempts per 15 minutes), returning HTTP `429` with `Retry-After` if exceeded.
+4. On the server (`service_role`), it resolves `admission_no -> auth_user_id -> active student user_profile -> auth.users.email`, verifies the password via Supabase Auth `signInWithPassword`, and returns **only** short-lived session tokens on success — or a uniform HTTP `401` (`"Invalid admission number or password."`) on any failure to prevent account enumeration.
+5. Passwords are never stored in school directory tables or `localStorage`, never logged, and never returned in any server response.
 
-1. **Real Deliverable Email Still Stored Server-Side**: Each provisioned student still has a verified school-managed or parent-approved email on `auth.users` so password recovery and security notifications work reliably.
-2. **Dedicated Server-Side Sign-In Proxy Edge Function (`student-admission-signin`)**:
-   - Accepts `{ admissionNo, password }` over HTTPS POST.
-   - Applies strict IP + admission-number rate limiting to block brute-force and enumeration attacks.
-   - Looks up `public.students` by normalized `admission_no` (`status = 'Active'`, `auth_user_id IS NOT NULL`) using `service_role` strictly on the server, then resolves the linked `auth.users.email` **without ever returning the email to unauthenticated callers**.
-   - Calls Supabase Auth password grant server-side and returns a generic `"Invalid admission number or password."` error for both unknown admission numbers and wrong passwords (preventing account enumeration).
-   - Returns the short-lived session tokens only upon successful credential verification.
+---
+
+## 5. Restricted, Verified Account-Support Procedure (Lost Credentials)
+
+All public password-recovery links, "Forgot password?" buttons, and unauthenticated password-reset forms have been intentionally removed from every login screen and portal interface to prevent unauthorized reset requests or account probing.
+
+If a user loses access to their password, follow this verified administrative procedure:
+
+1. **Students**:
+   - The student (or their verified guardian) reports the lockout to the school administrator / ICT desk in person or via verified school contact channels.
+   - The administrator verifies the student's identity and Admission Number, opens **Admin Portal -> Students -> Manage Access & Password**, enters and confirms a new password, and communicates it privately to the student/guardian.
+2. **Teachers & Staff**:
+   - Logged-in teachers can update their own password anytime via **Teacher Portal -> Account Security**.
+   - If locked out, after out-of-band identity verification (in person or via verified official contact), the administrator opens **Admin Portal -> Teachers -> Manage Access & Password**, assigns a new password with **"Require user to change password on next sign-in"** checked, and hands it off privately.
+3. **Parents / Guardians**:
+   - After verifying the guardian's identity against the registered phone number / ward details on file, the administrator opens **Admin Portal -> Parents -> Manage Access & Password**, assigns a new password with **"Require user to change password on next sign-in"** checked, and hands it off privately.
+4. **School Administrators (Break-Glass Recovery)**:
+   - Administrator accounts cannot be modified through the portal's provisioning Edge Function (privilege-escalation guard).
+   - If the primary administrator loses access, the authorized Supabase project owner must verify identity out of band, update the administrator user's password directly in **Supabase Dashboard -> Authentication -> Users** (requiring owner MFA), and instruct the administrator to rotate their password immediately upon signing in via **Admin Portal -> System Settings**.

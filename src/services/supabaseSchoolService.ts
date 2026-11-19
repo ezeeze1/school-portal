@@ -38,6 +38,7 @@ import {
 } from '../lib/classManagement';
 import {
   formatRecordPersistenceError,
+  isInternalStudentAuthEmail,
   makeAccountStatusKey,
 } from '../lib/accountProvisioning';
 
@@ -147,7 +148,7 @@ const fromSystemSettingsRow = (r: Record<string, any>): SystemSessionTerm => ({
   aboutPrincipalBio: r.about_principal_bio ?? undefined,
 });
 
-// Never write plaintext passwords or result_passcode to public.students
+// Never write plaintext passwords, result_passcode, or internal synthetic auth emails to public.students
 const toStudentRow = (s: Student) => ({
   id: s.id,
   auth_user_id: s.authUserId ?? null,
@@ -155,7 +156,7 @@ const toStudentRow = (s: Student) => ({
   first_name: s.firstName,
   last_name: s.lastName,
   other_names: s.otherNames ?? null,
-  email: s.email ?? null,
+  email: s.email && !isInternalStudentAuthEmail(s.email) ? s.email : null,
   gender: s.gender,
   dob: s.dob,
   class_id: s.classId,
@@ -177,7 +178,7 @@ const fromStudentRow = (r: Record<string, any>): Student => ({
   firstName: r.first_name,
   lastName: r.last_name,
   otherNames: r.other_names ?? undefined,
-  email: r.email ?? undefined,
+  email: r.email && !isInternalStudentAuthEmail(r.email) ? r.email : undefined,
   gender: r.gender,
   dob: r.dob,
   classId: r.class_id,
@@ -1283,7 +1284,10 @@ export const supabaseSchoolService = {
             role,
             recordId,
             authUserId: r.out_auth_user_id ?? undefined,
-            email: r.out_email ?? undefined,
+            email:
+              r.out_email && !(role === 'student' && isInternalStudentAuthEmail(r.out_email))
+                ? r.out_email
+                : undefined,
             status: statusVal,
             mustChangePassword: Boolean(r.out_must_change_password),
             invitedAt: r.out_invited_at ?? undefined,
@@ -1314,7 +1318,10 @@ export const supabaseSchoolService = {
             role,
             recordId,
             authUserId: r.auth_user_id ?? undefined,
-            email: r.email ?? undefined,
+            email:
+              r.email && !(role === 'student' && isInternalStudentAuthEmail(r.email))
+                ? r.email
+                : undefined,
             status: r.is_active ? 'active' : 'disabled',
             mustChangePassword: false,
             source: 'profiles_table',
@@ -1344,9 +1351,12 @@ export const supabaseSchoolService = {
       action: 'provision_account',
       role: req.role,
       recordId: req.recordId,
-      email: req.email,
       mode: req.mode,
-      ...(req.temporaryPassword ? { temporaryPassword: req.temporaryPassword } : {}),
+      ...(req.email ? { email: req.email } : {}),
+      ...(req.password ? { password: req.password } : {}),
+      ...(typeof req.mustChangePassword === 'boolean'
+        ? { mustChangePassword: req.mustChangePassword }
+        : {}),
       ...(req.redirectTo ? { redirectTo: req.redirectTo } : {}),
     });
 
@@ -1359,14 +1369,16 @@ export const supabaseSchoolService = {
     }
 
     const d = res.data ?? {};
+    const safeEmail =
+      typeof d.email === 'string' && !isInternalStudentAuthEmail(d.email) ? d.email : undefined;
     return {
       ok: true,
       status: d.status as AccountProvisioningStatus | undefined,
       authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
-      email: typeof d.email === 'string' ? d.email : undefined,
+      email: safeEmail,
+      loginIdentifier:
+        typeof d.loginIdentifier === 'string' ? d.loginIdentifier : safeEmail,
       mode: (d.mode as ProvisionAccountRequest['mode']) ?? req.mode,
-      oneTimeTemporaryPassword:
-        typeof d.oneTimeTemporaryPassword === 'string' ? d.oneTimeTemporaryPassword : undefined,
       recoveredPartialAccount: Boolean(d.recoveredPartialAccount),
       message: typeof d.message === 'string' ? d.message : undefined,
     };
@@ -1396,25 +1408,40 @@ export const supabaseSchoolService = {
     };
   },
 
-  async sendAdminPasswordReset(
+  /**
+   * Allows an authenticated administrator to assign a new password for an existing
+   * student, teacher, or parent account without ever returning or storing the password.
+   */
+  async assignPortalAccountPassword(
     role: PortalAccountRole,
     recordId: string,
-    redirectTo?: string
+    password: string,
+    mustChangePassword?: boolean
   ): Promise<ProvisionAccountResult> {
     const res = await invokeAdminProvisioningFunction({
-      action: 'send_password_reset',
+      action: 'assign_password',
       role,
       recordId,
-      ...(redirectTo ? { redirectTo } : {}),
+      password,
+      ...(typeof mustChangePassword === 'boolean' ? { mustChangePassword } : {}),
     });
     if (!res.ok) {
-      return { ok: false, code: res.code, error: res.error || 'Could not send password reset email.' };
+      return {
+        ok: false,
+        code: res.code,
+        error: res.error || 'Could not assign a new password for this account.',
+      };
     }
     const d = res.data ?? {};
+    const safeEmail =
+      typeof d.email === 'string' && !isInternalStudentAuthEmail(d.email) ? d.email : undefined;
     return {
       ok: true,
+      status: d.status as AccountProvisioningStatus | undefined,
       authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
-      email: typeof d.email === 'string' ? d.email : undefined,
+      email: safeEmail,
+      loginIdentifier:
+        typeof d.loginIdentifier === 'string' ? d.loginIdentifier : safeEmail,
       message: typeof d.message === 'string' ? d.message : undefined,
     };
   },
@@ -1442,19 +1469,175 @@ export const supabaseSchoolService = {
       ok: true,
       status: d.status as AccountProvisioningStatus | undefined,
       authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
-      email: typeof d.email === 'string' ? d.email : undefined,
+      email:
+        typeof d.email === 'string' && !isInternalStudentAuthEmail(d.email) ? d.email : undefined,
+      loginIdentifier: typeof d.loginIdentifier === 'string' ? d.loginIdentifier : undefined,
       message: typeof d.message === 'string' ? d.message : undefined,
     };
   },
 
-  upsertStudent: async (student: Student): Promise<{ ok: boolean; error?: string }> => {
+  /**
+   * Authenticates a student via Admission Number + Password through the dedicated
+   * server-side Edge Function (`student-auth-login`), returning short-lived Supabase
+   * session tokens without exposing student records or internal auth mappings publicly.
+   */
+  async authenticateStudentByAdmissionNo(
+    admissionNo: string,
+    password: string
+  ): Promise<{
+    ok: boolean;
+    session?: {
+      access_token: string;
+      refresh_token: string;
+      expires_at?: number;
+      expires_in?: number;
+      token_type?: string;
+    };
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+  }> {
+    if (!supabase) {
+      return {
+        ok: false,
+        code: 'not_configured',
+        error: 'Supabase authentication is not configured.',
+      };
+    }
+
+    try {
+      const { data, error } = await supabase.functions.invoke('student-auth-login', {
+        body: { admissionNo, password },
+      });
+
+      if (error) {
+        const errObj = error as unknown as {
+          name?: string;
+          message?: string;
+          context?: Response;
+        };
+        let parsedBody: Record<string, unknown> | null = null;
+        let statusCode: number | undefined;
+
+        if (errObj.context && typeof errObj.context.json === 'function') {
+          statusCode = errObj.context.status;
+          try {
+            const json = await errObj.context.clone().json();
+            if (json && typeof json === 'object') {
+              parsedBody = json as Record<string, unknown>;
+            }
+          } catch {
+            // Non-JSON response (e.g. gateway 404 when function not deployed)
+          }
+        }
+
+        if (parsedBody && typeof parsedBody.error === 'string') {
+          return {
+            ok: false,
+            code: typeof parsedBody.code === 'string' ? parsedBody.code : undefined,
+            error: parsedBody.error,
+            retryAfterSeconds:
+              typeof parsedBody.retryAfterSeconds === 'number'
+                ? parsedBody.retryAfterSeconds
+                : undefined,
+          };
+        }
+
+        const rawMessage = errObj.message || 'Unable to sign in right now.';
+        const isUnavailable =
+          errObj.name === 'FunctionsFetchError' ||
+          errObj.name === 'FunctionsRelayError' ||
+          statusCode === 404 ||
+          /failed to send a request|failed to fetch|not found|404/i.test(rawMessage);
+
+        return {
+          ok: false,
+          code: isUnavailable ? 'edge_function_unavailable' : 'auth_error',
+          error: isUnavailable
+            ? 'Student Admission Number sign-in service ("student-auth-login") is not deployed on Supabase yet. Deploy supabase/functions/student-auth-login with --no-verify-jwt.'
+            : 'Invalid admission number or password.',
+        };
+      }
+
+      const payload = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+      if (payload.ok === false) {
+        return {
+          ok: false,
+          code: typeof payload.code === 'string' ? payload.code : 'invalid_credentials',
+          error:
+            typeof payload.error === 'string'
+              ? payload.error
+              : 'Invalid admission number or password.',
+          retryAfterSeconds:
+            typeof payload.retryAfterSeconds === 'number' ? payload.retryAfterSeconds : undefined,
+        };
+      }
+
+      const sessionObj = payload.session as Record<string, unknown> | undefined;
+      if (
+        !sessionObj ||
+        typeof sessionObj.access_token !== 'string' ||
+        typeof sessionObj.refresh_token !== 'string'
+      ) {
+        return {
+          ok: false,
+          code: 'invalid_response',
+          error: 'Student authentication succeeded but no valid session was returned.',
+        };
+      }
+
+      return {
+        ok: true,
+        session: {
+          access_token: sessionObj.access_token,
+          refresh_token: sessionObj.refresh_token,
+          expires_at:
+            typeof sessionObj.expires_at === 'number' ? sessionObj.expires_at : undefined,
+          expires_in:
+            typeof sessionObj.expires_in === 'number' ? sessionObj.expires_in : undefined,
+          token_type:
+            typeof sessionObj.token_type === 'string' ? sessionObj.token_type : undefined,
+        },
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      return {
+        ok: false,
+        code: 'edge_function_unavailable',
+        error: `Could not reach student authentication service ("student-auth-login"): ${msg}`,
+      };
+    }
+  },
+
+  fetchExistingAdmissionNumbers: async (): Promise<string[]> => {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase.from('students').select('admission_no');
+      if (error || !Array.isArray(data)) return [];
+      return data
+        .map((row: Record<string, unknown>) =>
+          typeof row.admission_no === 'string' ? row.admission_no : ''
+        )
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  },
+
+  upsertStudent: async (
+    student: Student
+  ): Promise<{ ok: boolean; error?: string; code?: string }> => {
     if (!supabase) return { ok: false, error: 'Supabase not configured' };
     try {
       const { error } = await supabase
         .from('students')
         .upsert(toStudentRow(student), { onConflict: 'id' });
       if (error) {
-        return { ok: false, error: formatRecordPersistenceError('student', error.message, error.code) };
+        return {
+          ok: false,
+          code: error.code,
+          error: formatRecordPersistenceError('student', error.message, error.code),
+        };
       }
       return { ok: true };
     } catch (err) {

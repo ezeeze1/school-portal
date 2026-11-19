@@ -16,13 +16,14 @@ export type AccountProvisioningStatus =
   | 'active'
   | 'disabled';
 
-export type AccountProvisioningMode = 'invite' | 'temporary_password';
+export type AccountProvisioningMode = 'admin_password' | 'invite';
 
 export interface AccountStatusSummary {
   role: PortalAccountRole;
   recordId: string;
   authUserId?: string;
   email?: string;
+  loginIdentifier?: string;
   status: AccountProvisioningStatus;
   mustChangePassword: boolean;
   invitedAt?: string;
@@ -34,9 +35,10 @@ export interface AccountStatusSummary {
 export interface ProvisionAccountRequest {
   role: PortalAccountRole;
   recordId: string;
-  email: string;
+  email?: string;
   mode: AccountProvisioningMode;
-  temporaryPassword?: string;
+  password?: string;
+  mustChangePassword?: boolean;
   redirectTo?: string;
 }
 
@@ -45,8 +47,8 @@ export interface ProvisionAccountResult {
   status?: AccountProvisioningStatus;
   authUserId?: string;
   email?: string;
+  loginIdentifier?: string;
   mode?: AccountProvisioningMode;
-  oneTimeTemporaryPassword?: string;
   recoveredPartialAccount?: boolean;
   message?: string;
   error?: string;

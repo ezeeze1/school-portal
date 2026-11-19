@@ -157,7 +157,12 @@ export const Header: React.FC = () => {
                 <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-2 z-50 animate-fade-in">
                   <div className="p-3 border-b border-slate-100 dark:border-slate-800 mb-1">
                     <p className="font-bold text-sm text-slate-900 dark:text-white">{currentUser.name}</p>
-                    <p className="text-xs text-slate-500">{currentUser.email}</p>
+                    <p className="text-xs text-slate-500">
+                      {currentUser.email ||
+                        (currentUser.role === 'student' && currentUser.referenceId
+                          ? `Admission No: ${currentUser.referenceId}`
+                          : '')}
+                    </p>
                     <span className="inline-block mt-1 text-[10px] font-bold uppercase bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-md">
                       Ref: {currentUser.referenceId || 'N/A'}
                     </span>

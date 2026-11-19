@@ -1,6 +1,7 @@
 import type { AuthChangeEvent } from '@supabase/supabase-js';
 import type { User, UserProfile, UserRole } from '../types';
 import type { SupabasePortalSnapshot } from '../services/supabaseSchoolService';
+import { isInternalStudentAuthEmail } from './accountProvisioning';
 
 export type AuthenticatedPortalRole = Exclude<UserRole, 'public'>;
 
@@ -20,6 +21,10 @@ export interface AuthClientLike {
     error?: { message: string } | null;
   }>;
   signInWithPassword(credentials: { email: string; password: string }): Promise<{
+    data: { user: AuthUserLike | null; session: AuthSessionLike | null };
+    error: { message: string } | null;
+  }>;
+  setSession?(tokens: { access_token: string; refresh_token: string }): Promise<{
     data: { user: AuthUserLike | null; session: AuthSessionLike | null };
     error: { message: string } | null;
   }>;
@@ -64,7 +69,6 @@ function isHydrationFailure(result: HydrationResult): result is HydrationFailure
 
 export interface AuthCoordinatorCallbacks {
   setAuthLoading: (loading: boolean) => void;
-  setAuthRecoveryMode: (active: boolean) => void;
   applyPublicSnapshot: () => Promise<void>;
   applyAuthenticatedSession: (payload: {
     user: User;
@@ -73,7 +77,7 @@ export interface AuthCoordinatorCallbacks {
     navigateToPortal: boolean;
     mustChangePassword: boolean;
   }) => void;
-  resetToPublic: (options?: { navigateHome?: boolean; clearRecovery?: boolean }) => void;
+  resetToPublic: (options?: { navigateHome?: boolean }) => void;
 }
 
 const VALID_AUTHENTICATED_ROLES: ReadonlySet<AuthenticatedPortalRole> = new Set([
@@ -146,15 +150,21 @@ export function buildVerifiedPortalUser(
       (s) =>
         s.authUserId === authUser.id ||
         (profile.referenceId && s.id === profile.referenceId) ||
-        (s.email && s.email.toLowerCase() === email.toLowerCase())
+        (s.email && !isInternalStudentAuthEmail(email) && s.email.toLowerCase() === email.toLowerCase())
     );
+    const displayEmail =
+      matched?.email && !isInternalStudentAuthEmail(matched.email)
+        ? matched.email
+        : isInternalStudentAuthEmail(email)
+          ? ''
+          : email;
     return {
       id: matched?.id || profile.referenceId || authUser.id,
       authUserId: authUser.id,
       name: matched
         ? `${matched.firstName} ${matched.lastName}`
         : profile.fullName || metadataFullName || 'Student',
-      email,
+      email: displayEmail,
       role: 'student',
       avatar: matched?.avatar,
       referenceId: matched?.admissionNo || profile.referenceId,
@@ -209,7 +219,7 @@ interface InFlightHydration {
 }
 
 interface InFlightSignIn {
-  email: string;
+  key: string;
   promise: Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -321,7 +331,7 @@ export class AuthSessionCoordinator {
       if (sessionError) {
         this.activeAuthUserId = null;
         this.activeRole = 'public';
-        this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+        this.callbacks.resetToPublic({ navigateHome: false });
         if (isInvalidSessionError(sessionError.message)) {
           await this.safeSignOutInternal();
         }
@@ -351,7 +361,7 @@ export class AuthSessionCoordinator {
       } else {
         this.activeAuthUserId = null;
         this.activeRole = 'public';
-        this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+        this.callbacks.resetToPublic({ navigateHome: false });
         await this.callbacks.applyPublicSnapshot();
       }
     } catch (err) {
@@ -364,7 +374,7 @@ export class AuthSessionCoordinator {
       ) {
         this.activeAuthUserId = null;
         this.activeRole = 'public';
-        this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+        this.callbacks.resetToPublic({ navigateHome: false });
         await this.callbacks.applyPublicSnapshot();
       }
     } finally {
@@ -384,18 +394,8 @@ export class AuthSessionCoordinator {
       return;
     }
 
+    // Password recovery UI is intentionally disabled across all portal login interfaces.
     if (event === 'PASSWORD_RECOVERY') {
-      this.callbacks.setAuthRecoveryMode(true);
-      const recoveryUser = session?.user;
-      if (
-        recoveryUser &&
-        this.inFlightSignIn === null &&
-        !(this.activeAuthUserId === recoveryUser.id && this.activeRole !== 'public')
-      ) {
-        this.scheduleDeferred(() => {
-          void this.hydrateSession(recoveryUser, { navigateToPortal: false });
-        });
-      }
       return;
     }
 
@@ -418,7 +418,7 @@ export class AuthSessionCoordinator {
       this.activeAuthUserId = null;
       this.activeRole = 'public';
       this.clearPendingTimers();
-      this.callbacks.resetToPublic({ navigateHome: true, clearRecovery: true });
+      this.callbacks.resetToPublic({ navigateHome: true });
       void this.callbacks.applyPublicSnapshot();
       return;
     }
@@ -503,10 +503,12 @@ export class AuthSessionCoordinator {
       navigateToPortal?: boolean;
       forceRefresh?: boolean;
       expectedGeneration?: number;
+      disallowRole?: AuthenticatedPortalRole;
     }
   ): Promise<HydrationResult> {
     const navigateToPortal = Boolean(options?.navigateToPortal);
     const forceRefresh = Boolean(options?.forceRefresh);
+    const disallowRole = options?.disallowRole;
 
     if (
       options?.expectedGeneration !== undefined &&
@@ -554,7 +556,7 @@ export class AuthSessionCoordinator {
       this.sessionGeneration += 1;
       this.activeAuthUserId = null;
       this.activeRole = 'public';
-      this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+      this.callbacks.resetToPublic({ navigateHome: false });
     }
 
     const generation = this.sessionGeneration;
@@ -593,7 +595,7 @@ export class AuthSessionCoordinator {
           const isDeactivated = /deactivated/i.test(error);
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
           return {
             ok: false,
@@ -605,7 +607,7 @@ export class AuthSessionCoordinator {
         if (!profile) {
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
           return {
             ok: false,
@@ -618,7 +620,7 @@ export class AuthSessionCoordinator {
         if (!profile.isActive) {
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
           return {
             ok: false,
@@ -630,13 +632,28 @@ export class AuthSessionCoordinator {
         if (profile.authUserId !== authUser.id || !isValidAuthenticatedRole(profile.role)) {
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
           return {
             ok: false,
             reason: 'invalid_role',
             error:
               'Your account role could not be verified from Supabase. Please contact the school administrator.',
+          };
+        }
+
+        if (disallowRole && profile.role === disallowRole) {
+          this.activeAuthUserId = null;
+          this.activeRole = 'public';
+          this.callbacks.resetToPublic({ navigateHome: false });
+          await this.callbacks.applyPublicSnapshot();
+          return {
+            ok: false,
+            reason: 'invalid_role',
+            error:
+              disallowRole === 'student'
+                ? 'Students must sign in using their Student Admission Number and password.'
+                : 'Please use the correct portal login method for your account category.',
           };
         }
 
@@ -662,7 +679,7 @@ export class AuthSessionCoordinator {
         if (!resolvedUser || !isValidAuthenticatedRole(resolvedUser.role)) {
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
           return {
             ok: false,
@@ -674,10 +691,13 @@ export class AuthSessionCoordinator {
         this.activeAuthUserId = authUser.id;
         this.activeRole = profile.role;
 
-        const mustChangePassword = Boolean(
-          profile.mustChangePassword === true ||
-            authUser.user_metadata?.must_change_password === true
-        );
+        const mustChangePassword =
+          profile.role === 'student'
+            ? false
+            : Boolean(
+                profile.mustChangePassword === true ||
+                  authUser.user_metadata?.must_change_password === true
+              );
 
         this.callbacks.applyAuthenticatedSession({
           user: resolvedUser,
@@ -705,7 +725,7 @@ export class AuthSessionCoordinator {
         if (this.isAttached) {
           this.activeAuthUserId = null;
           this.activeRole = 'public';
-          this.callbacks.resetToPublic({ navigateHome: false, clearRecovery: false });
+          this.callbacks.resetToPublic({ navigateHome: false });
           await this.callbacks.applyPublicSnapshot();
         }
         return {
@@ -738,8 +758,9 @@ export class AuthSessionCoordinator {
       return { ok: false, error: 'Please enter both your email address and password.' };
     }
 
+    const attemptKey = `email:${cleanedEmail}`;
     if (this.inFlightSignIn) {
-      if (this.inFlightSignIn.email === cleanedEmail) {
+      if (this.inFlightSignIn.key === attemptKey) {
         return this.inFlightSignIn.promise;
       }
       return {
@@ -753,7 +774,7 @@ export class AuthSessionCoordinator {
     this.clearPendingTimers();
 
     const attempt: InFlightSignIn = {
-      email: cleanedEmail,
+      key: attemptKey,
       promise: Promise.resolve({ ok: false, error: 'Sign-in not started.' }),
     };
 
@@ -779,10 +800,10 @@ export class AuthSessionCoordinator {
           navigateToPortal: true,
           forceRefresh: true,
           expectedGeneration: loginGeneration,
+          disallowRole: 'student',
         });
 
         if (isHydrationFailure(hydrationResult)) {
-          // Never force-sign-out if the call was merely cancelled/unmounted.
           if (hydrationResult.reason !== 'superseded' && hydrationResult.reason !== 'unmounted') {
             await this.safeSignOutInternal();
           }
@@ -791,6 +812,126 @@ export class AuthSessionCoordinator {
             error:
               hydrationResult.error ||
               'Account is not linked to an active school portal role.',
+          };
+        }
+
+        if (this.isAttached) {
+          this.callbacks.setAuthLoading(false);
+        }
+
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error:
+            err instanceof Error
+              ? err.message
+              : 'Unable to sign in right now. Please check your connection and try again.',
+        };
+      } finally {
+        if (this.inFlightSignIn === attempt) {
+          this.inFlightSignIn = null;
+        }
+      }
+    };
+
+    attempt.promise = runSignIn();
+    this.inFlightSignIn = attempt;
+    return attempt.promise;
+  }
+
+  /**
+   * Signs in using short-lived Supabase session tokens returned by a protected
+   * server-side authentication Edge Function (used for Student Admission Number login).
+   * Shares the same single-flight lock so `SIGNED_IN` listener events never race or
+   * supersede the verified session.
+   */
+  async signInWithServerSession(
+    identifierKey: string,
+    authenticateServerSide: () => Promise<{
+      ok: boolean;
+      session?: { access_token: string; refresh_token: string };
+      error?: string;
+    }>
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (typeof this.auth.setSession !== 'function') {
+      return {
+        ok: false,
+        error: 'Supabase Auth session handler is unavailable in this client.',
+      };
+    }
+
+    const attemptKey = `server:${identifierKey.trim().toUpperCase()}`;
+    if (this.inFlightSignIn) {
+      if (this.inFlightSignIn.key === attemptKey) {
+        return this.inFlightSignIn.promise;
+      }
+      return {
+        ok: false,
+        error: 'A sign-in request is already in progress. Please wait.',
+      };
+    }
+
+    const loginGeneration = ++this.sessionGeneration;
+    this.inFlightHydration = null;
+    this.clearPendingTimers();
+
+    const attempt: InFlightSignIn = {
+      key: attemptKey,
+      promise: Promise.resolve({ ok: false, error: 'Sign-in not started.' }),
+    };
+
+    const runSignIn = async (): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const serverResult = await authenticateServerSide();
+
+        if (loginGeneration !== this.sessionGeneration) {
+          return { ok: false, error: 'Sign-in was cancelled. Please try again.' };
+        }
+
+        if (
+          !serverResult.ok ||
+          !serverResult.session?.access_token ||
+          !serverResult.session?.refresh_token
+        ) {
+          return {
+            ok: false,
+            error: serverResult.error || 'Invalid admission number or password.',
+          };
+        }
+
+        const { data, error } = await this.auth.setSession!({
+          access_token: serverResult.session.access_token,
+          refresh_token: serverResult.session.refresh_token,
+        });
+
+        if (loginGeneration !== this.sessionGeneration) {
+          return { ok: false, error: 'Sign-in was cancelled. Please try again.' };
+        }
+
+        const sessionUser = data.user || data.session?.user || null;
+        if (error || !sessionUser) {
+          return {
+            ok: false,
+            error: error?.message || 'Unable to establish your authenticated portal session.',
+          };
+        }
+
+        const hydrationResult = await this.hydrateSession(sessionUser, {
+          navigateToPortal: true,
+          forceRefresh: true,
+          expectedGeneration: loginGeneration,
+        });
+
+        if (isHydrationFailure(hydrationResult)) {
+          if (hydrationResult.reason !== 'superseded' && hydrationResult.reason !== 'unmounted') {
+            await this.safeSignOutInternal();
+          }
+          return {
+            ok: false,
+            error:
+              hydrationResult.error ||
+              'Student account is not linked to an active school portal profile.',
           };
         }
 
@@ -832,7 +973,7 @@ export class AuthSessionCoordinator {
 
     await this.safeSignOutInternal();
 
-    this.callbacks.resetToPublic({ navigateHome: true, clearRecovery: true });
+    this.callbacks.resetToPublic({ navigateHome: true });
     await this.callbacks.applyPublicSnapshot();
   }
 }

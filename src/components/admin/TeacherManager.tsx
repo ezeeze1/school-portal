@@ -23,7 +23,6 @@ import {
   AccountProvisioningModal,
   AccountStatusBadge,
   AccountTargetInfo,
-  OneTimePasswordHandoff,
   ProvisioningServiceBanner,
   RegistrationAccountAccessSection,
 } from './AccountAccessPanel';
@@ -83,13 +82,13 @@ export const TeacherManager: React.FC = () => {
 
   // Account provisioning modal state
   const [accountModalTarget, setAccountModalTarget] = useState<AccountTargetInfo | null>(null);
-  const [initialHandoff, setInitialHandoff] = useState<OneTimePasswordHandoff | null>(null);
 
   // Account access options inside Register Educator modal
   const [createAccountNow, setCreateAccountNow] = useState(false);
-  const [provisionMode, setProvisionMode] = useState<AccountProvisioningMode>('invite');
-  const [useCustomTempPassword, setUseCustomTempPassword] = useState(false);
-  const [customTempPassword, setCustomTempPassword] = useState('');
+  const [provisionMode, setProvisionMode] = useState<AccountProvisioningMode>('admin_password');
+  const [accountPassword, setAccountPassword] = useState('');
+  const [confirmAccountPassword, setConfirmAccountPassword] = useState('');
+  const [requireChangeOnFirstLogin, setRequireChangeOnFirstLogin] = useState(true);
 
   // Live class & subject options from Supabase (preserving exact class names for RLS alignment)
   const classOptions = useMemo(() => {
@@ -188,9 +187,17 @@ export const TeacherManager: React.FC = () => {
     setSelectedClasses(classOptions.length > 0 ? [classOptions[0]] : []);
     setSelectedSubjects(subjectOptions.length > 0 ? [subjectOptions[0]] : []);
     setCreateAccountNow(false);
-    setProvisionMode('invite');
-    setUseCustomTempPassword(false);
-    setCustomTempPassword('');
+    setProvisionMode('admin_password');
+    setAccountPassword('');
+    setConfirmAccountPassword('');
+    setRequireChangeOnFirstLogin(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setAccountPassword('');
+    setConfirmAccountPassword('');
+    setFormError(null);
+    setShowAddModal(false);
   };
 
   const handleOpenAddModal = () => {
@@ -228,15 +235,17 @@ export const TeacherManager: React.FC = () => {
       return;
     }
 
-    // Always validate official email uniqueness & syntax (and temp password if provisioning now)
+    // Always validate official email uniqueness & syntax (and password if assigning password now)
+    const shouldValidatePassword = createAccountNow && provisionMode === 'admin_password';
     const validation = validateProvisionRequestInput(
       {
         role: 'teacher',
         recordId: '__new__',
         email: normalizedEmail,
         mode: createAccountNow ? provisionMode : 'invite',
-        useCustomTempPassword: createAccountNow && useCustomTempPassword,
-        temporaryPassword: createAccountNow ? customTempPassword : undefined,
+        password: shouldValidatePassword ? accountPassword : undefined,
+        confirmPassword: shouldValidatePassword ? confirmAccountPassword : undefined,
+        validatePassword: shouldValidatePassword,
       },
       { students, teachers, parents }
     );
@@ -266,7 +275,7 @@ export const TeacherManager: React.FC = () => {
       staffId,
       firstName,
       lastName,
-      email: validation.normalizedEmail,
+      email: validation.normalizedEmail || normalizedEmail,
       phone,
       subjectIds: resolveSubjectIdsFromNames(selectedSubjects),
       subjectsTaught: selectedSubjects,
@@ -293,9 +302,10 @@ export const TeacherManager: React.FC = () => {
         const provRes = await provisionPortalAccount({
           role: 'teacher',
           recordId: savedTeacher.id,
-          email: validation.normalizedEmail,
+          email: validation.normalizedEmail || normalizedEmail,
           mode: provisionMode,
-          temporaryPassword: validation.temporaryPassword,
+          password: validation.password,
+          mustChangePassword: provisionMode === 'invite' ? true : requireChangeOnFirstLogin,
         });
 
         setShowAddModal(false);
@@ -310,23 +320,14 @@ export const TeacherManager: React.FC = () => {
           return;
         }
 
-        if (provRes.oneTimeTemporaryPassword) {
-          setAccountModalTarget(null);
-          setInitialHandoff({
-            fullName: `${firstName} ${lastName}`,
-            role: 'teacher',
-            email: provRes.email || validation.normalizedEmail,
-            temporaryPassword: provRes.oneTimeTemporaryPassword,
-            recoveredPartialAccount: provRes.recoveredPartialAccount,
-          });
-          showToast(`Staff member "${firstName} ${lastName}" registered and login account created.`);
-          return;
-        }
-
         showToast(
-          `Staff member "${firstName} ${lastName}" registered and invitation sent to ${
-            provRes.email || validation.normalizedEmail
-          }.`
+          provisionMode === 'invite'
+            ? `Staff member "${firstName} ${lastName}" registered and setup invitation sent to ${
+                provRes.email || validation.normalizedEmail
+              }.`
+            : `Staff member "${firstName} ${lastName}" registered and active login account created (${
+                provRes.email || validation.normalizedEmail
+              }).`
         );
         return;
       }
@@ -380,6 +381,7 @@ export const TeacherManager: React.FC = () => {
         recordId: editingTeacher.id,
         email: normalizedEmail,
         mode: 'invite',
+        validatePassword: false,
       },
       { students, teachers, parents }
     );
@@ -587,7 +589,6 @@ export const TeacherManager: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        setInitialHandoff(null);
                         setAccountModalTarget(toAccountTarget(teacher));
                       }}
                       className={`w-full py-1.5 px-3 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
@@ -605,7 +606,7 @@ export const TeacherManager: React.FC = () => {
                         </>
                       ) : (
                         <>
-                          <Settings2 className="w-3.5 h-3.5" /> Manage Access &amp; Reset Password
+                          <Settings2 className="w-3.5 h-3.5" /> Manage Access &amp; Password
                         </>
                       )}
                     </button>
@@ -708,7 +709,7 @@ export const TeacherManager: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddModal(false)}
+                onClick={handleCloseAddModal}
                 className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white"
               >
                 <X className="w-5 h-5" />
@@ -827,6 +828,7 @@ export const TeacherManager: React.FC = () => {
 
             {/* Account Access Provisioning Section */}
             <RegistrationAccountAccessSection
+              role="teacher"
               roleLabel="staff member"
               loginEmail={formData.email}
               createAccountNow={createAccountNow}
@@ -836,10 +838,12 @@ export const TeacherManager: React.FC = () => {
               }}
               mode={provisionMode}
               onModeChange={setProvisionMode}
-              useCustomTempPassword={useCustomTempPassword}
-              onToggleUseCustomTempPassword={setUseCustomTempPassword}
-              customTempPassword={customTempPassword}
-              onCustomTempPasswordChange={setCustomTempPassword}
+              password={accountPassword}
+              onPasswordChange={setAccountPassword}
+              confirmPassword={confirmAccountPassword}
+              onConfirmPasswordChange={setConfirmAccountPassword}
+              requireChangeOnFirstLogin={requireChangeOnFirstLogin}
+              onToggleRequireChangeOnFirstLogin={setRequireChangeOnFirstLogin}
               serviceAvailable={provisioningServiceAvailable}
             />
 
@@ -847,7 +851,7 @@ export const TeacherManager: React.FC = () => {
               <button
                 type="button"
                 disabled={isSaving}
-                onClick={() => setShowAddModal(false)}
+                onClick={handleCloseAddModal}
                 className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-5 py-2 rounded-xl text-xs"
               >
                 Cancel
@@ -916,12 +920,11 @@ export const TeacherManager: React.FC = () => {
                     onClick={() => {
                       const target = toAccountTarget(editingTeacher);
                       setEditingTeacher(null);
-                      setInitialHandoff(null);
                       setAccountModalTarget(target);
                     }}
                     className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[11px]"
                   >
-                    {needsCreate ? 'Create Login Account' : 'Manage / Reset Password'}
+                    {needsCreate ? 'Create Login Account' : 'Manage Access & Password'}
                   </button>
                 </div>
               );
@@ -1048,10 +1051,8 @@ export const TeacherManager: React.FC = () => {
       <AccountProvisioningModal
         target={accountModalTarget}
         summary={activeModalSummary}
-        initialHandoff={initialHandoff}
         onClose={() => {
           setAccountModalTarget(null);
-          setInitialHandoff(null);
         }}
         onSuccessMessage={showToast}
       />

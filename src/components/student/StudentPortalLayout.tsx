@@ -48,7 +48,7 @@ export const StudentPortalLayout: React.FC = () => {
             Student Profile Not Linked
           </h2>
           <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-            Your Supabase account ({currentUser?.email || 'signed-in user'}) is not linked to an
+            Your Supabase account ({currentUser?.referenceId || currentUser?.email || 'signed-in student'}) is not linked to an
             enrolled student profile yet. Please contact the school administration office to link
             your Admission Number.
           </p>

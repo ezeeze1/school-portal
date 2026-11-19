@@ -34,15 +34,12 @@ function mapDirectoryRow(role: ProvisionableRole, row: Record<string, unknown>):
     auth_user_id: typeof row.auth_user_id === 'string' ? row.auth_user_id : null,
     email: typeof row.email === 'string' ? row.email : null,
     fullName: [first, last].filter(Boolean).join(' ') || (role === 'student' ? 'Student' : 'Teacher'),
+    admissionNo: role === 'student' && typeof row.admission_no === 'string' ? row.admission_no : null,
     status: typeof row.status === 'string' ? row.status : 'Active',
   };
 }
 
-function createSupabaseBackendAdapter(
-  adminClient: SupabaseClient,
-  supabaseUrl: string,
-  anonKey: string
-): ProvisioningBackendAdapter {
+function createSupabaseBackendAdapter(adminClient: SupabaseClient): ProvisioningBackendAdapter {
   const listAllAuthUsers = async (): Promise<AuthUserRecord[]> => {
     const users: AuthUserRecord[] = [];
     const perPage = 200;
@@ -113,7 +110,9 @@ function createSupabaseBackendAdapter(
       const selectCols =
         role === 'parent'
           ? 'id, auth_user_id, email, title, full_name'
-          : 'id, auth_user_id, email, first_name, last_name, status';
+          : role === 'student'
+            ? 'id, auth_user_id, admission_no, email, first_name, last_name, status'
+            : 'id, auth_user_id, email, first_name, last_name, status';
       const { data, error } = await adminClient
         .from(table)
         .select(selectCols)
@@ -128,7 +127,9 @@ function createSupabaseBackendAdapter(
       const selectCols =
         role === 'parent'
           ? 'id, auth_user_id, email, title, full_name'
-          : 'id, auth_user_id, email, first_name, last_name, status';
+          : role === 'student'
+            ? 'id, auth_user_id, admission_no, email, first_name, last_name, status'
+            : 'id, auth_user_id, email, first_name, last_name, status';
       const { data, error } = await adminClient.from(table).select(selectCols);
       if (error || !data) return [];
       return (data as unknown as Record<string, unknown>[]).map((row) => mapDirectoryRow(role, row));
@@ -162,13 +163,16 @@ function createSupabaseBackendAdapter(
       role: ProvisionableRole,
       recordId: string,
       authUserId: string,
-      normalizedEmail: string
+      normalizedEmail?: string | null
     ) {
       const table = tableForRole(role);
-      const { error } = await adminClient
-        .from(table)
-        .update({ auth_user_id: authUserId, email: normalizedEmail })
-        .eq('id', recordId);
+      const patch: Record<string, unknown> = { auth_user_id: authUserId };
+      // Only update directory email when an explicit real external email is provided
+      // (never overwrite public.students.email with an internal `.internal` identifier).
+      if (normalizedEmail) {
+        patch.email = normalizedEmail;
+      }
+      const { error } = await adminClient.from(table).update(patch).eq('id', recordId);
       if (error) {
         return { ok: false, error: error.message };
       }
@@ -195,7 +199,6 @@ function createSupabaseBackendAdapter(
 
       if (!error) return { ok: true };
 
-      // Graceful compatibility if optional additive migration columns have not been applied yet
       if (/column .* does not exist|schema cache/i.test(error.message)) {
         const basePayload = {
           auth_user_id: input.authUserId,
@@ -270,24 +273,6 @@ function createSupabaseBackendAdapter(
     async deleteAuthUser(authUserId: string) {
       await adminClient.auth.admin.deleteUser(authUserId);
     },
-
-    async sendPasswordResetEmail(email: string, redirectTo?: string) {
-      // Ephemeral server-side client triggers Supabase SMTP password reset without touching admin session
-      const ephemeralClient = createClient(supabaseUrl, anonKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-          detectSessionInUrl: false,
-        },
-      });
-      const { error } = await ephemeralClient.auth.resetPasswordForEmail(email, {
-        redirectTo,
-      });
-      if (error) {
-        return { ok: false, error: error.message };
-      }
-      return { ok: true };
-    },
   };
 }
 
@@ -308,7 +293,6 @@ Deno.serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? serviceRoleKey;
 
   if (!supabaseUrl || !serviceRoleKey) {
     return new Response(
@@ -343,7 +327,7 @@ Deno.serve(async (req: Request) => {
     },
   });
 
-  const adapter = createSupabaseBackendAdapter(adminClient, supabaseUrl, anonKey);
+  const adapter = createSupabaseBackendAdapter(adminClient);
 
   try {
     const result = await handleProvisioningRequest(
@@ -360,7 +344,10 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    console.error('[admin-account-provisioning] Unhandled error:', err instanceof Error ? err.message : 'unknown');
+    console.error(
+      '[admin-account-provisioning] Unhandled error:',
+      err instanceof Error ? err.message : 'unknown'
+    );
     return new Response(
       JSON.stringify({
         ok: false,

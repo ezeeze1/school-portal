@@ -5,14 +5,21 @@
  *  1. Caller JWT must resolve to a real Supabase Auth user.
  *  2. Caller role MUST be verified as `role = 'admin'` AND `is_active = true` from `public.user_profiles`.
  *  3. Target role is strictly constrained to `'student' | 'teacher' | 'parent'` (never `'admin'`).
- *  4. Passwords are ONLY handled by Supabase Admin Auth APIs; never written to school tables or logs.
- *  5. Duplicate emails, mismatched record links, and cross-role account hijacking are blocked.
- *  6. Partial failures trigger compensating cleanup or safe metadata-verified idempotent recovery.
+ *  4. Passwords are ONLY handled by Supabase Admin Auth APIs; NEVER written to school tables,
+ *     NEVER logged, and NEVER returned in server HTTP responses.
+ *  5. Students do not require a personal email address — a non-deliverable internal auth
+ *     identifier (`std.<id>@students.divineacademy.internal`) is used strictly inside Supabase Auth,
+ *     while students authenticate via Admission Number + Password through `student-auth-login`.
+ *  6. Duplicate emails, mismatched record links, and cross-role account hijacking are blocked.
+ *  7. Partial failures trigger compensating cleanup or safe metadata-verified idempotent recovery.
+ *  8. Password-recovery emails are NOT sent by this function.
  */
 
 export type ProvisionableRole = 'student' | 'teacher' | 'parent';
 export type AccountStatus = 'not_created' | 'invitation_pending' | 'active' | 'disabled';
-export type ProvisionMode = 'invite' | 'temporary_password';
+export type ProvisionMode = 'admin_password' | 'invite';
+
+export const INTERNAL_STUDENT_AUTH_DOMAIN = 'students.divineacademy.internal';
 
 export interface AuthUserRecord {
   id: string;
@@ -44,6 +51,7 @@ export interface DirectoryRecord {
   auth_user_id: string | null;
   email: string | null;
   fullName: string;
+  admissionNo?: string | null;
   status?: string | null;
 }
 
@@ -52,6 +60,7 @@ export interface ServerAccountStatusItem {
   recordId: string;
   authUserId?: string;
   email?: string;
+  loginIdentifier?: string;
   status: AccountStatus;
   mustChangePassword: boolean;
   invitedAt?: string;
@@ -78,7 +87,7 @@ export interface ProvisioningBackendAdapter {
     role: ProvisionableRole,
     recordId: string,
     authUserId: string,
-    normalizedEmail: string
+    normalizedEmail?: string | null
   ): Promise<{ ok: boolean; error?: string }>;
 
   upsertUserProfile(input: {
@@ -121,7 +130,6 @@ export interface ProvisioningBackendAdapter {
     }
   ): Promise<{ user: AuthUserRecord | null; error?: string }>;
   deleteAuthUser(authUserId: string): Promise<void>;
-  sendPasswordResetEmail(email: string, redirectTo?: string): Promise<{ ok: boolean; error?: string }>;
 }
 
 export interface CoreHttpResult {
@@ -140,8 +148,34 @@ export function normalizeEmail(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
 }
 
-export function isValidEmail(email: string): boolean {
-  return Boolean(email) && email.length <= 254 && EMAIL_REGEX.test(email);
+export function isInternalStudentAuthEmail(raw: unknown): boolean {
+  const cleaned = normalizeEmail(raw);
+  return cleaned.endsWith(`@${INTERNAL_STUDENT_AUTH_DOMAIN}`);
+}
+
+export function isValidExternalEmail(email: string): boolean {
+  return (
+    Boolean(email) &&
+    email.length <= 254 &&
+    !isInternalStudentAuthEmail(email) &&
+    EMAIL_REGEX.test(email)
+  );
+}
+
+/**
+ * Generates a deterministic, unique, non-deliverable Supabase Auth identifier
+ * for a student record using the RFC-reserved `.internal` top-level domain.
+ * Never routable over public email infrastructure and never exposed in student UI.
+ */
+export function buildInternalStudentAuthEmail(studentRecordId: string): string {
+  const safeSlug = studentRecordId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  const localPart = safeSlug ? `std.${safeSlug}` : `std.${Date.now()}`;
+  return `${localPart}@${INTERNAL_STUDENT_AUTH_DOMAIN}`;
 }
 
 export function sanitizeRedirectUrl(raw: unknown, allowedOriginsRaw?: string): string | undefined {
@@ -164,57 +198,13 @@ export function sanitizeRedirectUrl(raw: unknown, allowedOriginsRaw?: string): s
   }
 }
 
-export function validateTemporaryPassword(password: string): string | null {
-  if (password.length < 10) return 'Temporary password must be at least 10 characters long.';
-  if (password.length > 128) return 'Temporary password must not exceed 128 characters.';
-  if (!/[A-Z]/.test(password)) return 'Temporary password must include an uppercase letter.';
-  if (!/[a-z]/.test(password)) return 'Temporary password must include a lowercase letter.';
-  if (!/[0-9]/.test(password)) return 'Temporary password must include a number.';
-  if (!/[^A-Za-z0-9]/.test(password)) return 'Temporary password must include a symbol.';
+export function validateAssignedPassword(password: string): string | null {
+  if (password.length < 8) return 'Password must be at least 8 characters long.';
+  if (password.length > 128) return 'Password must not exceed 128 characters.';
+  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must include at least one number.';
   return null;
-}
-
-/**
- * Generates a cryptographically strong, readable temporary password using CSPRNG.
- */
-export function generateStrongTemporaryPassword(length = 14): string {
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const lower = 'abcdefghijkmnopqrstuvwxyz';
-  const digits = '23456789';
-  const symbols = '!@#$%&*?';
-  const all = upper + lower + digits + symbols;
-
-  const randomIndex = (max: number): number => {
-    const buf = new Uint32Array(1);
-    const limit = Math.floor(0x100000000 / max) * max;
-    let val = 0;
-    do {
-      crypto.getRandomValues(buf);
-      val = buf[0];
-    } while (val >= limit);
-    return val % max;
-  };
-
-  const chars = [
-    upper[randomIndex(upper.length)],
-    lower[randomIndex(lower.length)],
-    digits[randomIndex(digits.length)],
-    symbols[randomIndex(symbols.length)],
-  ];
-
-  while (chars.length < Math.max(length, 12)) {
-    chars.push(all[randomIndex(all.length)]);
-  }
-
-  // Fisher-Yates shuffle using CSPRNG
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomIndex(i + 1);
-    const tmp = chars[i];
-    chars[i] = chars[j];
-    chars[j] = tmp;
-  }
-
-  return chars.join('');
 }
 
 export function isAuthUserBanned(authUser: AuthUserRecord | null | undefined, nowMs = Date.now()): boolean {
@@ -231,12 +221,22 @@ export function deriveAuthoritativeStatus(
   nowMs = Date.now()
 ): ServerAccountStatusItem {
   const linkedAuthId = record.auth_user_id || profile?.auth_user_id || undefined;
+  const studentLoginId =
+    role === 'student' ? (record.admissionNo?.trim() || undefined) : undefined;
+  const safeExternalEmail = (candidate?: string | null): string | undefined => {
+    const norm = normalizeEmail(candidate);
+    if (!norm) return undefined;
+    if (role === 'student' && isInternalStudentAuthEmail(norm)) return undefined;
+    return norm;
+  };
 
   if (!linkedAuthId && !profile && !authUser) {
+    const recEmail = safeExternalEmail(record.email);
     return {
       role,
       recordId: record.id,
-      email: record.email || undefined,
+      email: recEmail,
+      loginIdentifier: studentLoginId || recEmail,
       status: 'not_created',
       mustChangePassword: false,
       needsRepair: false,
@@ -244,9 +244,6 @@ export function deriveAuthoritativeStatus(
     };
   }
 
-  // Partial link detection: e.g., auth_user_id exists on school record without user_profiles,
-  // or user_profiles exists without auth_user_id written back to school record,
-  // or auth_user_id points to a deleted Auth user.
   const hasCompleteTriplet =
     Boolean(record.auth_user_id) &&
     Boolean(profile) &&
@@ -255,11 +252,13 @@ export function deriveAuthoritativeStatus(
     record.auth_user_id === authUser!.id;
 
   if (!authUser) {
+    const fallbackEmail = safeExternalEmail(profile?.email) || safeExternalEmail(record.email);
     return {
       role,
       recordId: record.id,
       authUserId: linkedAuthId,
-      email: profile?.email || record.email || undefined,
+      email: fallbackEmail,
+      loginIdentifier: studentLoginId || fallbackEmail,
       status: 'not_created',
       mustChangePassword: false,
       needsRepair: Boolean(linkedAuthId || profile),
@@ -285,16 +284,25 @@ export function deriveAuthoritativeStatus(
       ? 'invitation_pending'
       : 'active';
 
-  const mustChangePassword = Boolean(
-    profile?.must_change_password === true ||
-      authUser.user_metadata?.must_change_password === true
-  );
+  const mustChangePassword =
+    role === 'student'
+      ? false
+      : Boolean(
+          profile?.must_change_password === true ||
+            authUser.user_metadata?.must_change_password === true
+        );
+
+  const resolvedEmail =
+    safeExternalEmail(authUser.email) ||
+    safeExternalEmail(profile?.email) ||
+    safeExternalEmail(record.email);
 
   return {
     role,
     recordId: record.id,
     authUserId: authUser.id,
-    email: normalizeEmail(authUser.email) || normalizeEmail(profile?.email) || record.email || undefined,
+    email: resolvedEmail,
+    loginIdentifier: studentLoginId || resolvedEmail,
     status,
     mustChangePassword,
     invitedAt: profile?.invited_at || authUser.invited_at || undefined,
@@ -388,7 +396,9 @@ export async function handleProvisioningRequest(
   // ACTION: list_statuses
   // --------------------------------------------------------------------------
   if (action === 'list_statuses') {
-    const requestedRolesRaw = Array.isArray(args.body.roles) ? args.body.roles : ['student', 'teacher', 'parent'];
+    const requestedRolesRaw = Array.isArray(args.body.roles)
+      ? args.body.roles
+      : ['student', 'teacher', 'parent'];
     const roles: ProvisionableRole[] = [];
     for (const r of requestedRolesRaw) {
       if (isProvisionableRole(r) && !roles.includes(r)) {
@@ -402,7 +412,9 @@ export async function handleProvisioningRequest(
     const [profiles, authUsers, roleLists] = await Promise.all([
       adapter.listNonAdminProfiles(),
       adapter.listAllAuthUsers(),
-      Promise.all(roles.map(async (role) => ({ role, records: await adapter.listDirectoryRecords(role) }))),
+      Promise.all(
+        roles.map(async (role) => ({ role, records: await adapter.listDirectoryRecords(role) }))
+      ),
     ]);
 
     const authById = new Map<string, AuthUserRecord>(authUsers.map((u) => [u.id, u]));
@@ -441,7 +453,8 @@ export async function handleProvisioningRequest(
       body: {
         ok: false,
         code: 'invalid_role',
-        error: 'Target role must be "student", "teacher", or "parent". Administrator role elevation is prohibited.',
+        error:
+          'Target role must be "student", "teacher", or "parent". Administrator role elevation is prohibited.',
       },
     };
   }
@@ -468,58 +481,111 @@ export async function handleProvisioningRequest(
   }
 
   // --------------------------------------------------------------------------
-  // ACTION: provision_account (idempotent, rollback-safe, no role escalation)
+  // ACTION: provision_account (idempotent, rollback-safe, no password in responses)
   // --------------------------------------------------------------------------
   if (action === 'provision_account') {
-    const email = normalizeEmail(args.body?.email || record.email);
-    if (!isValidEmail(email)) {
+    const requestedMode = args.body?.mode;
+    const mode: ProvisionMode =
+      role === 'student'
+        ? 'admin_password'
+        : requestedMode === 'invite'
+          ? 'invite'
+          : 'admin_password';
+
+    if (role === 'student' && requestedMode === 'invite') {
       return {
         status: 400,
         body: {
           ok: false,
-          code: 'invalid_email',
-          error: 'A valid, unique email address is required to create a Supabase Authentication account.',
+          code: 'student_password_required',
+          error:
+            'Student accounts are provisioned with an administrator-assigned password and Admission Number login.',
         },
       };
     }
 
-    const mode: ProvisionMode =
-      args.body?.mode === 'temporary_password' ? 'temporary_password' : 'invite';
+    let authEmail: string;
+    let externalEmailToStore: string | null = null;
+    let displayLoginIdentifier: string;
+
+    if (role === 'student') {
+      if (!record.admissionNo || !record.admissionNo.trim()) {
+        return {
+          status: 400,
+          body: {
+            ok: false,
+            code: 'missing_admission_no',
+            error: 'Student record must have a valid Admission Number before creating a login account.',
+          },
+        };
+      }
+      // Internal non-deliverable Auth identifier strictly for Supabase Auth storage.
+      // Preserves student's optional contact email (or NULL) without requiring personal email.
+      authEmail = buildInternalStudentAuthEmail(record.id);
+      externalEmailToStore = null; // Do not overwrite students.email with internal identifier
+      displayLoginIdentifier = record.admissionNo.trim().toUpperCase();
+    } else {
+      const normalized = normalizeEmail(args.body?.email || record.email);
+      if (!isValidExternalEmail(normalized)) {
+        return {
+          status: 400,
+          body: {
+            ok: false,
+            code: 'invalid_email',
+            error: 'A valid, unique email address is required to create a staff or parent login account.',
+          },
+        };
+      }
+      authEmail = normalized;
+      externalEmailToStore = normalized;
+      displayLoginIdentifier = normalized;
+    }
+
     const redirectTo = sanitizeRedirectUrl(args.body?.redirectTo, args.allowedRedirectOrigins);
 
-    let resolvedTemporaryPassword: string | undefined;
-    if (mode === 'temporary_password') {
-      const supplied =
-        typeof args.body?.temporaryPassword === 'string' ? args.body.temporaryPassword : '';
-      if (supplied.trim().length > 0) {
-        const pwdErr = validateTemporaryPassword(supplied);
-        if (pwdErr) {
-          return {
-            status: 400,
-            body: { ok: false, code: 'weak_password', error: pwdErr },
-          };
-        }
-        resolvedTemporaryPassword = supplied;
-      } else {
-        resolvedTemporaryPassword = generateStrongTemporaryPassword(14);
+    let assignedPassword: string | undefined;
+    if (mode === 'admin_password') {
+      const supplied = typeof args.body?.password === 'string' ? args.body.password : '';
+      const pwdErr = validateAssignedPassword(supplied);
+      if (pwdErr) {
+        return {
+          status: 400,
+          body: { ok: false, code: 'weak_password', error: pwdErr },
+        };
+      }
+      assignedPassword = supplied;
+    }
+
+    const mustChangePassword =
+      role === 'student'
+        ? false
+        : mode === 'invite'
+          ? true
+          : typeof args.body?.mustChangePassword === 'boolean'
+            ? args.body.mustChangePassword
+            : true;
+
+    // Check cross-directory email conflict for external emails (teachers / parents)
+    if (externalEmailToStore) {
+      const directoryConflict = await adapter.findDirectoryEmailConflict(
+        externalEmailToStore,
+        role,
+        recordId
+      );
+      if (directoryConflict) {
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            code: 'duplicate_email',
+            error: `Email "${externalEmailToStore}" is already assigned to another ${directoryConflict.role} record.`,
+          },
+        };
       }
     }
 
-    // Check cross-directory email conflict (another student, teacher, or parent)
-    const directoryConflict = await adapter.findDirectoryEmailConflict(email, role, recordId);
-    if (directoryConflict) {
-      return {
-        status: 409,
-        body: {
-          ok: false,
-          code: 'duplicate_email',
-          error: `Email "${email}" is already assigned to another ${directoryConflict.role} record.`,
-        },
-      };
-    }
-
-    // Check existing profile by email
-    const existingProfileByEmail = await adapter.getProfileByEmail(email);
+    // Check existing profile by authEmail
+    const existingProfileByEmail = await adapter.getProfileByEmail(authEmail);
     if (
       existingProfileByEmail &&
       (existingProfileByEmail.role !== role || existingProfileByEmail.reference_id !== recordId)
@@ -529,7 +595,10 @@ export async function handleProvisioningRequest(
         body: {
           ok: false,
           code: 'duplicate_email',
-          error: `Email "${email}" is already linked to another portal account.`,
+          error:
+            role === 'student'
+              ? 'An authentication identity conflict was detected for this student record.'
+              : `Email "${authEmail}" is already linked to another portal account.`,
         },
       };
     }
@@ -552,19 +621,18 @@ export async function handleProvisioningRequest(
           ok: false,
           code: 'already_provisioned',
           error:
-            'A Supabase login account is already linked to this record. Use Reset Password or Manage Access instead.',
+            'A Supabase login account is already linked to this record. Use "Manage Access & Password" to assign a new password or update status.',
         },
       };
     }
 
-    // Check whether an Auth user already exists with this email
-    const existingAuthByEmail = await adapter.findAuthUserByEmail(email);
+    // Check whether an Auth user already exists with authEmail
+    const existingAuthByEmail = await adapter.findAuthUserByEmail(authEmail);
     let authUserToLink: AuthUserRecord | null = null;
     let newlyCreatedAuthUser = false;
     let recoveredPartialAccount = false;
 
     if (existingRecordAuth) {
-      // Partial failure where school record had auth_user_id, but user_profiles was missing
       const profForAuth = await adapter.getProfileByAuthUserId(existingRecordAuth.id);
       if (!isRecoverablePartialAuthUser(existingRecordAuth, role, recordId, record, profForAuth)) {
         return {
@@ -580,7 +648,6 @@ export async function handleProvisioningRequest(
       authUserToLink = existingRecordAuth;
       recoveredPartialAccount = true;
     } else if (existingProfileByRef) {
-      // Partial failure where user_profiles row existed, but school record lacked auth_user_id
       const profAuthUser = await adapter.getAuthUserById(existingProfileByRef.auth_user_id);
       if (profAuthUser) {
         authUserToLink = profAuthUser;
@@ -595,7 +662,10 @@ export async function handleProvisioningRequest(
           body: {
             ok: false,
             code: 'duplicate_email',
-            error: `Email "${email}" already belongs to another Supabase Authentication account.`,
+            error:
+              role === 'student'
+                ? 'This student account identity conflicts with an existing authentication record.'
+                : `Email "${authEmail}" already belongs to another Supabase Authentication account.`,
           },
         };
       }
@@ -606,7 +676,10 @@ export async function handleProvisioningRequest(
           body: {
             ok: false,
             code: 'duplicate_email',
-            error: `Email "${email}" is already registered to another Supabase Authentication account.`,
+            error:
+              role === 'student'
+                ? 'This student account identity conflicts with an existing authentication record.'
+                : `Email "${authEmail}" is already registered to another Supabase Authentication account.`,
           },
         };
       }
@@ -615,12 +688,15 @@ export async function handleProvisioningRequest(
     }
 
     const nowIso = new Date().toISOString();
-    const baseUserMetadata = {
+    const baseUserMetadata: Record<string, unknown> = {
       full_name: record.fullName,
       portal_role: role,
-      must_change_password: true,
+      must_change_password: mustChangePassword,
+      ...(role === 'student' && record.admissionNo
+        ? { admission_no: record.admissionNo.trim().toUpperCase() }
+        : {}),
     };
-    const baseAppMetadata = {
+    const baseAppMetadata: Record<string, unknown> = {
       portal_role: role,
       provisioned_for_role: role,
       provisioned_record_id: recordId,
@@ -629,7 +705,7 @@ export async function handleProvisioningRequest(
     if (!authUserToLink) {
       if (mode === 'invite') {
         const inviteRes = await adapter.inviteAuthUserByEmail({
-          email,
+          email: authEmail,
           redirectTo,
           userMetadata: baseUserMetadata,
         });
@@ -645,14 +721,13 @@ export async function handleProvisioningRequest(
         }
         authUserToLink = inviteRes.user;
         newlyCreatedAuthUser = true;
-        // Stamp traceable server-only ownership metadata for safe idempotent retries
         await adapter.updateAuthUserById(authUserToLink.id, {
           app_metadata: baseAppMetadata,
         });
       } else {
         const createRes = await adapter.createAuthUserWithPassword({
-          email,
-          password: resolvedTemporaryPassword!,
+          email: authEmail,
+          password: assignedPassword!,
           userMetadata: baseUserMetadata,
           appMetadata: baseAppMetadata,
         });
@@ -670,11 +745,10 @@ export async function handleProvisioningRequest(
         newlyCreatedAuthUser = true;
       }
     } else if (recoveredPartialAccount) {
-      // Recover partially created Auth user cleanly before completing DB links
-      if (mode === 'temporary_password' && !authUserToLink.last_sign_in_at) {
+      if (mode === 'admin_password') {
         const upd = await adapter.updateAuthUserById(authUserToLink.id, {
-          email,
-          password: resolvedTemporaryPassword!,
+          email: authUserToLink.email || authEmail,
+          password: assignedPassword!,
           email_confirm: true,
           user_metadata: baseUserMetadata,
           app_metadata: baseAppMetadata,
@@ -682,13 +756,14 @@ export async function handleProvisioningRequest(
         if (upd.user) authUserToLink = upd.user;
       } else if (mode === 'invite' && !authUserToLink.email_confirmed_at && !authUserToLink.confirmed_at) {
         await adapter.inviteAuthUserByEmail({
-          email,
+          email: authEmail,
           redirectTo,
           userMetadata: baseUserMetadata,
         });
       }
     }
 
+    const finalAuthEmail = normalizeEmail(authUserToLink.email) || authEmail;
     const accountStatus: Exclude<AccountStatus, 'not_created'> =
       mode === 'invite' && !authUserToLink.email_confirmed_at && !authUserToLink.confirmed_at
         ? 'invitation_pending'
@@ -699,11 +774,11 @@ export async function handleProvisioningRequest(
       authUserId: authUserToLink.id,
       role,
       referenceId: recordId,
-      email,
+      email: finalAuthEmail,
       fullName: record.fullName,
       isActive: true,
       accountStatus,
-      mustChangePassword: mode === 'temporary_password' ? true : accountStatus === 'invitation_pending',
+      mustChangePassword: mode === 'invite' ? accountStatus === 'invitation_pending' : mustChangePassword,
       invitedAt: mode === 'invite' ? nowIso : null,
       activatedAt: accountStatus === 'active' ? nowIso : null,
     });
@@ -724,12 +799,12 @@ export async function handleProvisioningRequest(
       };
     }
 
-    // Step 3: Link auth_user_id & email onto the school record (students / teachers / parents)
+    // Step 3: Link auth_user_id (and external email for staff/parents only) onto school record
     const recordLink = await adapter.linkDirectoryRecordAuthUser(
       role,
       recordId,
       authUserToLink.id,
-      email
+      externalEmailToStore
     );
 
     if (!recordLink.ok) {
@@ -749,22 +824,23 @@ export async function handleProvisioningRequest(
       };
     }
 
+    // SECURITY: Never return any password value in the HTTP response.
     return {
       status: 200,
       body: {
         ok: true,
         status: accountStatus,
         authUserId: authUserToLink.id,
-        email,
+        ...(externalEmailToStore ? { email: externalEmailToStore } : {}),
+        loginIdentifier: displayLoginIdentifier,
         mode,
         recoveredPartialAccount,
-        ...(mode === 'temporary_password' && resolvedTemporaryPassword
-          ? { oneTimeTemporaryPassword: resolvedTemporaryPassword }
-          : {}),
         message:
           mode === 'invite'
-            ? `Account setup invitation sent to ${email}. Status is now Invitation pending until confirmed.`
-            : `Login account created for ${email}. Share the one-time temporary password securely; the user must change it on first sign-in.`,
+            ? `Account setup invitation sent to ${displayLoginIdentifier}. Status is now Invitation pending until confirmed.`
+            : role === 'student'
+              ? `Student login account created and activated for Admission Number ${displayLoginIdentifier}.`
+              : `Portal login account created and activated for ${displayLoginIdentifier}.`,
       },
     };
   }
@@ -809,31 +885,154 @@ export async function handleProvisioningRequest(
     };
   }
 
-  const linkedEmail = normalizeEmail(linkedAuthUser.email || linkedProfile?.email || record.email);
+  const linkedAuthEmail = normalizeEmail(
+    linkedAuthUser.email || linkedProfile?.email || record.email
+  );
+  const safeDisplayIdentifier =
+    role === 'student'
+      ? record.admissionNo?.trim().toUpperCase() || record.id
+      : linkedAuthEmail;
+  const safeExternalLinkedEmail =
+    role === 'student' && isInternalStudentAuthEmail(linkedAuthEmail)
+      ? undefined
+      : linkedAuthEmail || undefined;
 
   // --------------------------------------------------------------------------
-  // ACTION: resend_invite
+  // ACTION: assign_password (authorized administrator-only password replacement)
+  // --------------------------------------------------------------------------
+  if (action === 'assign_password') {
+    if ((linkedProfile && !linkedProfile.is_active) || isAuthUserBanned(linkedAuthUser)) {
+      return {
+        status: 400,
+        body: {
+          ok: false,
+          code: 'account_disabled',
+          error: 'This account is currently disabled. Reactivate it before assigning a new password.',
+        },
+      };
+    }
+
+    const newPassword = typeof args.body?.password === 'string' ? args.body.password : '';
+    const pwdErr = validateAssignedPassword(newPassword);
+    if (pwdErr) {
+      return {
+        status: 400,
+        body: { ok: false, code: 'weak_password', error: pwdErr },
+      };
+    }
+
+    const mustChangePassword =
+      role === 'student'
+        ? false
+        : typeof args.body?.mustChangePassword === 'boolean'
+          ? args.body.mustChangePassword
+          : true;
+
+    const existingUserMeta =
+      linkedAuthUser.user_metadata && typeof linkedAuthUser.user_metadata === 'object'
+        ? linkedAuthUser.user_metadata
+        : {};
+
+    const authUpdate = await adapter.updateAuthUserById(linkedAuthUser.id, {
+      password: newPassword,
+      email_confirm: true,
+      user_metadata: {
+        ...existingUserMeta,
+        full_name: record.fullName,
+        portal_role: role,
+        must_change_password: mustChangePassword,
+        ...(role === 'student' && record.admissionNo
+          ? { admission_no: record.admissionNo.trim().toUpperCase() }
+          : {}),
+      },
+    });
+
+    if (!authUpdate.user) {
+      return {
+        status: 500,
+        body: {
+          ok: false,
+          code: 'password_update_failed',
+          error: authUpdate.error || 'Could not assign new password in Supabase Authentication.',
+        },
+      };
+    }
+
+    const profileRes = await adapter.upsertUserProfile({
+      authUserId: linkedAuthUser.id,
+      role,
+      referenceId: recordId,
+      email: linkedAuthEmail,
+      fullName: record.fullName,
+      isActive: true,
+      accountStatus: 'active',
+      mustChangePassword,
+      invitedAt: linkedProfile?.invited_at ?? authUpdate.user.invited_at ?? null,
+      activatedAt: linkedProfile?.activated_at ?? new Date().toISOString(),
+    });
+
+    if (!profileRes.ok) {
+      return {
+        status: 500,
+        body: {
+          ok: false,
+          code: 'profile_status_update_failed',
+          error: profileRes.error || 'Password updated, but profile metadata sync failed.',
+        },
+      };
+    }
+
+    // SECURITY: Never return the assigned password in the HTTP response.
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        status: 'active',
+        authUserId: linkedAuthUser.id,
+        ...(safeExternalLinkedEmail ? { email: safeExternalLinkedEmail } : {}),
+        loginIdentifier: safeDisplayIdentifier,
+        message: `A new password has been securely assigned in Supabase Auth for ${safeDisplayIdentifier}.`,
+      },
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // ACTION: resend_invite (teachers & parents only when invitation_pending)
   // --------------------------------------------------------------------------
   if (action === 'resend_invite') {
+    if (role === 'student') {
+      return {
+        status: 400,
+        body: {
+          ok: false,
+          code: 'invite_not_supported_for_student',
+          error: 'Student accounts use Admission Number + administrator-assigned password.',
+        },
+      };
+    }
     if (linkedAuthUser.email_confirmed_at || linkedAuthUser.confirmed_at) {
       return {
         status: 400,
         body: {
           ok: false,
           code: 'already_confirmed',
-          error: 'This account is already confirmed and active. Use Reset Password instead.',
+          error: 'This account is already confirmed and active. Use "Assign New Password" if needed.',
         },
       };
     }
-    if (!isValidEmail(linkedEmail)) {
+    if (!isValidExternalEmail(linkedAuthEmail)) {
       return {
         status: 400,
-        body: { ok: false, code: 'invalid_email', error: 'Linked account does not have a valid email address.' },
+        body: {
+          ok: false,
+          code: 'invalid_email',
+          error: 'Linked account does not have a valid email address.',
+        },
       };
     }
     const redirectTo = sanitizeRedirectUrl(args.body?.redirectTo, args.allowedRedirectOrigins);
     const inviteRes = await adapter.inviteAuthUserByEmail({
-      email: linkedEmail,
+      email: linkedAuthEmail,
       redirectTo,
       userMetadata: {
         full_name: record.fullName,
@@ -856,7 +1055,7 @@ export async function handleProvisioningRequest(
       authUserId: linkedAuthUser.id,
       role,
       referenceId: recordId,
-      email: linkedEmail,
+      email: linkedAuthEmail,
       fullName: record.fullName,
       isActive: true,
       accountStatus: 'invitation_pending',
@@ -870,53 +1069,9 @@ export async function handleProvisioningRequest(
         ok: true,
         status: 'invitation_pending',
         authUserId: linkedAuthUser.id,
-        email: linkedEmail,
-        message: `Setup invitation re-sent to ${linkedEmail}.`,
-      },
-    };
-  }
-
-  // --------------------------------------------------------------------------
-  // ACTION: send_password_reset
-  // --------------------------------------------------------------------------
-  if (action === 'send_password_reset') {
-    if ((linkedProfile && !linkedProfile.is_active) || isAuthUserBanned(linkedAuthUser)) {
-      return {
-        status: 400,
-        body: {
-          ok: false,
-          code: 'account_disabled',
-          error: 'This account is currently disabled. Reactivate it before sending a password reset email.',
-        },
-      };
-    }
-    if (!isValidEmail(linkedEmail)) {
-      return {
-        status: 400,
-        body: { ok: false, code: 'invalid_email', error: 'No valid login email is linked to this account.' },
-      };
-    }
-
-    const redirectTo = sanitizeRedirectUrl(args.body?.redirectTo, args.allowedRedirectOrigins);
-    const resetRes = await adapter.sendPasswordResetEmail(linkedEmail, redirectTo);
-    if (!resetRes.ok) {
-      return {
-        status: 400,
-        body: {
-          ok: false,
-          code: 'password_reset_failed',
-          error: resetRes.error || 'Could not send password reset email via Supabase Auth.',
-        },
-      };
-    }
-
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        authUserId: linkedAuthUser.id,
-        email: linkedEmail,
-        message: `Password reset instructions sent to ${linkedEmail}.`,
+        email: linkedAuthEmail,
+        loginIdentifier: linkedAuthEmail,
+        message: `Setup invitation re-sent to ${linkedAuthEmail}.`,
       },
     };
   }
@@ -958,7 +1113,7 @@ export async function handleProvisioningRequest(
       authUserId: linkedAuthUser.id,
       role,
       referenceId: recordId,
-      email: linkedEmail,
+      email: linkedAuthEmail,
       fullName: record.fullName,
       isActive: enabled,
       accountStatus: nextStatus,
@@ -985,10 +1140,11 @@ export async function handleProvisioningRequest(
         ok: true,
         status: nextStatus,
         authUserId: linkedAuthUser.id,
-        email: linkedEmail,
+        ...(safeExternalLinkedEmail ? { email: safeExternalLinkedEmail } : {}),
+        loginIdentifier: safeDisplayIdentifier,
         message: enabled
-          ? `Login account for ${linkedEmail} has been reactivated.`
-          : `Login account for ${linkedEmail} has been disabled.`,
+          ? `Login account for ${safeDisplayIdentifier} has been reactivated.`
+          : `Login account for ${safeDisplayIdentifier} has been disabled.`,
       },
     };
   }

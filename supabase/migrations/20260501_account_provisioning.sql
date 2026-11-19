@@ -58,6 +58,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_user_profiles_role_reference
 CREATE UNIQUE INDEX IF NOT EXISTS uq_user_profiles_email_lower
   ON public.user_profiles (lower(email));
 
+-- Case-insensitive uniqueness guard for student Admission Numbers
+-- (complements existing uq_students_admission_no without adding any new table)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_students_admission_no_normalized
+  ON public.students (lower(trim(admission_no)));
+
 -- ----------------------------------------------------------------------------
 -- 3. AUTHORITATIVE SERVER-SIDE ACCOUNT STATUS RPC (ADMINISTRATOR ONLY)
 --    Reads auth.users confirmation/ban state alongside public.user_profiles.
@@ -104,7 +109,10 @@ BEGIN
         THEN 'invitation_pending'
       ELSE 'active'
     END AS derived_status,
-    COALESCE(up.must_change_password, false) AS derived_must_change,
+    CASE
+      WHEN up.role = 'student' THEN false
+      ELSE COALESCE(up.must_change_password, false)
+    END AS derived_must_change,
     au.email_confirmed_at,
     COALESCE(up.invited_at, au.invited_at) AS derived_invited_at,
     au.last_sign_in_at,
@@ -141,7 +149,7 @@ BEGIN
   RETURN QUERY
   SELECT
     up.account_status,
-    COALESCE(up.must_change_password, false),
+    CASE WHEN up.role = 'student' THEN false ELSE COALESCE(up.must_change_password, false) END,
     up.is_active
   FROM public.user_profiles up
   WHERE up.auth_user_id = v_uid
@@ -168,7 +176,8 @@ BEGIN
       activated_at = COALESCE(up.activated_at, now()),
       updated_at = now()
   WHERE up.auth_user_id = v_uid
-    AND up.is_active = true;
+    AND up.is_active = true
+    AND up.role <> 'student';
 
   RETURN FOUND;
 END;

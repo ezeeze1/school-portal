@@ -8,6 +8,7 @@ import { AttendanceRecorder } from './AttendanceRecorder';
 import { AssignmentsManager } from './AssignmentsManager';
 import { TeacherAnnouncements } from './TeacherAnnouncements';
 import { StudentManager } from '../admin/StudentManager';
+import { ChangePasswordPanel } from '../common/ChangePasswordPanel';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -19,6 +20,7 @@ import {
   GraduationCap,
   AlertCircle,
   LogOut,
+  KeyRound,
 } from 'lucide-react';
 
 export const TeacherPortalLayout: React.FC = () => {
@@ -74,6 +76,7 @@ export const TeacherPortalLayout: React.FC = () => {
     { id: 'attendance', label: 'Daily Roll Call', icon: Users },
     { id: 'assignments', label: 'Assignments & Notes', icon: BookOpen },
     { id: 'announcements', label: 'Broadcast Alerts', icon: Bell },
+    { id: 'security', label: 'Account Security', icon: KeyRound },
   ];
 
   return (
@@ -109,6 +112,14 @@ export const TeacherPortalLayout: React.FC = () => {
       {activeTab === 'attendance' && <AttendanceRecorder />}
       {activeTab === 'assignments' && <AssignmentsManager />}
       {activeTab === 'announcements' && <TeacherAnnouncements />}
+      {activeTab === 'security' && (
+        <ChangePasswordPanel
+          roleLabel="Teacher & Staff"
+          accountEmail={currentTeacher.email}
+          identifierLabel="Staff ID"
+          identifierValue={currentTeacher.staffId}
+        />
+      )}
     </div>
   );
 };

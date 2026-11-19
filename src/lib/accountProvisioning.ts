@@ -10,6 +10,18 @@ import type {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+/**
+ * Reserved RFC 6762 / ICANN `.internal` domain suffix used strictly on the server
+ * for student Supabase Auth identities when a student has no personal email address.
+ * Never exposed in student-facing UI and never routable on the public internet.
+ */
+export const INTERNAL_STUDENT_AUTH_DOMAIN = 'students.divineacademy.internal';
+
+export function isInternalStudentAuthEmail(raw: string | undefined | null): boolean {
+  const cleaned = normalizeLoginEmail(raw);
+  return cleaned.endsWith(`@${INTERNAL_STUDENT_AUTH_DOMAIN}`);
+}
+
 export const ACCOUNT_STATUS_META: Record<
   AccountProvisioningStatus,
   {
@@ -66,6 +78,7 @@ export function normalizeLoginEmail(raw: string | undefined | null): string {
 export function isValidLoginEmail(raw: string | undefined | null): boolean {
   const cleaned = normalizeLoginEmail(raw);
   if (!cleaned || cleaned.length > 254) return false;
+  if (isInternalStudentAuthEmail(cleaned)) return false;
   return EMAIL_PATTERN.test(cleaned);
 }
 
@@ -87,7 +100,7 @@ export function isPasswordValidationFailure(
 }
 
 /**
- * Validates temporary or personal passwords for minimum security strength.
+ * Validates administrator-assigned or personal passwords for minimum security strength.
  * Never logs or persists the password value.
  */
 export function validatePortalPassword(
@@ -130,7 +143,7 @@ export function validatePortalPassword(
   if (requireSymbol && !/[^A-Za-z0-9]/.test(password)) {
     return {
       ok: false,
-      error: 'Temporary password must include at least one symbol (e.g. ! @ # $ % & *).',
+      error: 'Password must include at least one symbol (e.g. ! @ # $ % & *).',
     };
   }
   return { ok: true };
@@ -138,9 +151,9 @@ export function validatePortalPassword(
 
 export interface ProvisionValidationSuccess {
   ok: true;
-  normalizedEmail: string;
+  normalizedEmail?: string;
   mode: AccountProvisioningMode;
-  temporaryPassword?: string;
+  password?: string;
 }
 
 export interface ProvisionValidationFailure {
@@ -158,16 +171,22 @@ export function isProvisionValidationFailure(
 
 /**
  * Validates client-side inputs before invoking the server-side provisioning Edge Function.
- * Checks valid email syntax, cross-directory uniqueness, and temporary password strength.
+ *
+ * Role rules:
+ *  - `student`: Personal email is OPTIONAL (students log in using Admission Number + Password).
+ *    Mode is always `'admin_password'` with password + confirmPassword.
+ *  - `teacher` / `parent`: A valid, unique email address is REQUIRED. Supports `'admin_password'`
+ *    (with password + confirmPassword) or `'invite'`.
  */
 export function validateProvisionRequestInput(
   input: {
     role: PortalAccountRole;
     recordId: string;
-    email: string;
+    email?: string;
     mode: AccountProvisioningMode;
-    useCustomTempPassword?: boolean;
-    temporaryPassword?: string;
+    password?: string;
+    confirmPassword?: string;
+    validatePassword?: boolean;
   },
   directory: {
     students: Student[];
@@ -176,70 +195,90 @@ export function validateProvisionRequestInput(
   }
 ): ProvisionValidationResult {
   const normalizedEmail = normalizeLoginEmail(input.email);
-  if (!isValidLoginEmail(normalizedEmail)) {
+  const emailRequired = input.role !== 'student' || input.mode === 'invite';
+
+  if (emailRequired && !normalizedEmail) {
     return {
       ok: false,
       error: 'Enter a valid, unique email address for this portal login identity.',
     };
   }
 
-  // Check duplicate email against other student, teacher, and parent records
-  const duplicateStudent = directory.students.find(
-    (s) =>
-      normalizeLoginEmail(s.email) === normalizedEmail &&
-      !(input.role === 'student' && s.id === input.recordId)
-  );
-  if (duplicateStudent) {
-    return {
-      ok: false,
-      error: `Email "${normalizedEmail}" is already assigned to student ${duplicateStudent.firstName} ${duplicateStudent.lastName} (${duplicateStudent.admissionNo}).`,
-    };
+  if (normalizedEmail) {
+    if (!isValidLoginEmail(normalizedEmail)) {
+      return {
+        ok: false,
+        error: 'Enter a valid email address (for example, name@divineacademy.edu).',
+      };
+    }
+
+    // Check duplicate email against other student, teacher, and parent records
+    const duplicateStudent = directory.students.find(
+      (s) =>
+        normalizeLoginEmail(s.email) === normalizedEmail &&
+        !(input.role === 'student' && s.id === input.recordId)
+    );
+    if (duplicateStudent) {
+      return {
+        ok: false,
+        error: `Email "${normalizedEmail}" is already assigned to student ${duplicateStudent.firstName} ${duplicateStudent.lastName} (${duplicateStudent.admissionNo}).`,
+      };
+    }
+
+    const duplicateTeacher = directory.teachers.find(
+      (t) =>
+        normalizeLoginEmail(t.email) === normalizedEmail &&
+        !(input.role === 'teacher' && t.id === input.recordId)
+    );
+    if (duplicateTeacher) {
+      return {
+        ok: false,
+        error: `Email "${normalizedEmail}" is already assigned to staff member ${duplicateTeacher.firstName} ${duplicateTeacher.lastName} (${duplicateTeacher.staffId}).`,
+      };
+    }
+
+    const duplicateParent = directory.parents.find(
+      (p) =>
+        normalizeLoginEmail(p.email) === normalizedEmail &&
+        !(input.role === 'parent' && p.id === input.recordId)
+    );
+    if (duplicateParent) {
+      return {
+        ok: false,
+        error: `Email "${normalizedEmail}" is already assigned to parent/guardian ${duplicateParent.fullName} (${duplicateParent.parentId}).`,
+      };
+    }
   }
 
-  const duplicateTeacher = directory.teachers.find(
-    (t) =>
-      normalizeLoginEmail(t.email) === normalizedEmail &&
-      !(input.role === 'teacher' && t.id === input.recordId)
-  );
-  if (duplicateTeacher) {
-    return {
-      ok: false,
-      error: `Email "${normalizedEmail}" is already assigned to staff member ${duplicateTeacher.firstName} ${duplicateTeacher.lastName} (${duplicateTeacher.staffId}).`,
-    };
-  }
+  const effectiveMode: AccountProvisioningMode =
+    input.role === 'student' ? 'admin_password' : input.mode;
+  const shouldValidatePassword =
+    input.validatePassword !== undefined ? input.validatePassword : effectiveMode === 'admin_password';
 
-  const duplicateParent = directory.parents.find(
-    (p) =>
-      normalizeLoginEmail(p.email) === normalizedEmail &&
-      !(input.role === 'parent' && p.id === input.recordId)
-  );
-  if (duplicateParent) {
-    return {
-      ok: false,
-      error: `Email "${normalizedEmail}" is already assigned to parent/guardian ${duplicateParent.fullName} (${duplicateParent.parentId}).`,
-    };
-  }
-
-  if (input.mode === 'temporary_password' && input.useCustomTempPassword) {
-    const pwdCheck = validatePortalPassword(input.temporaryPassword ?? '', {
-      minLength: 10,
-      requireSymbol: true,
-    });
+  if (effectiveMode === 'admin_password' && shouldValidatePassword) {
+    const pwd = input.password ?? '';
+    const pwdCheck = validatePortalPassword(pwd, { minLength: 8 });
     if (isPasswordValidationFailure(pwdCheck)) {
       return { ok: false, error: pwdCheck.error };
     }
+    if (input.confirmPassword !== undefined && pwd !== input.confirmPassword) {
+      return {
+        ok: false,
+        error: 'Password and Confirm Password do not match.',
+      };
+    }
     return {
       ok: true,
-      normalizedEmail,
-      mode: input.mode,
-      temporaryPassword: input.temporaryPassword,
+      normalizedEmail: normalizedEmail || undefined,
+      mode: effectiveMode,
+      password: pwd,
     };
   }
 
   return {
     ok: true,
-    normalizedEmail,
-    mode: input.mode,
+    normalizedEmail: normalizedEmail || undefined,
+    mode: effectiveMode,
   };
 }
 
@@ -252,23 +291,36 @@ export function resolveRecordAccountStatus(
   role: PortalAccountRole,
   recordId: string,
   statusMap: Record<string, AccountStatusSummary>,
-  recordHints?: { authUserId?: string; email?: string }
+  recordHints?: { authUserId?: string; email?: string; loginIdentifier?: string }
 ): AccountStatusSummary {
   const key = makeAccountStatusKey(role, recordId);
   const authoritative = statusMap[key];
   if (authoritative) {
-    return authoritative;
+    const safeEmail =
+      role === 'student' && isInternalStudentAuthEmail(authoritative.email)
+        ? recordHints?.email
+        : authoritative.email;
+    return {
+      ...authoritative,
+      email: safeEmail,
+      loginIdentifier:
+        authoritative.loginIdentifier ||
+        recordHints?.loginIdentifier ||
+        (role === 'student' ? undefined : safeEmail),
+    };
   }
 
-  // Only if the database record itself carries a persisted auth_user_id UUID
-  // before status hydration completes, report a partial/repairable state rather
-  // than fabricating active status.
   if (recordHints?.authUserId) {
     return {
       role,
       recordId,
       authUserId: recordHints.authUserId,
-      email: recordHints.email,
+      email:
+        role === 'student' && isInternalStudentAuthEmail(recordHints.email)
+          ? undefined
+          : recordHints.email,
+      loginIdentifier:
+        recordHints.loginIdentifier || (role === 'student' ? undefined : recordHints.email),
       status: 'active',
       mustChangePassword: false,
       needsRepair: false,
@@ -279,7 +331,12 @@ export function resolveRecordAccountStatus(
   return {
     role,
     recordId,
-    email: recordHints?.email,
+    email:
+      role === 'student' && isInternalStudentAuthEmail(recordHints?.email)
+        ? undefined
+        : recordHints?.email,
+    loginIdentifier:
+      recordHints?.loginIdentifier || (role === 'student' ? undefined : recordHints?.email),
     status: 'not_created',
     mustChangePassword: false,
     source: 'profiles_table',

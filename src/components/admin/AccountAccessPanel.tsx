@@ -2,11 +2,10 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
-  Check,
   CheckCircle2,
-  Copy,
   Eye,
   EyeOff,
+  IdCard,
   KeyRound,
   Loader2,
   Mail,
@@ -25,8 +24,10 @@ import {
 } from '../../types';
 import {
   ACCOUNT_STATUS_META,
+  isPasswordValidationFailure,
   isProvisionValidationFailure,
   normalizeLoginEmail,
+  validatePortalPassword,
   validateProvisionRequestInput,
 } from '../../lib/accountProvisioning';
 import { useSchool } from '../../context/SchoolContext';
@@ -39,14 +40,6 @@ export interface AccountTargetInfo {
   identifierValue: string;
   email?: string;
   authUserId?: string;
-}
-
-export interface OneTimePasswordHandoff {
-  fullName: string;
-  role: PortalAccountRole;
-  email: string;
-  temporaryPassword: string;
-  recoveredPartialAccount?: boolean;
 }
 
 export const AccountStatusBadge: React.FC<{
@@ -79,10 +72,10 @@ export const AccountStatusBadge: React.FC<{
 
       {showHints && summary.mustChangePassword && summary.status === 'active' && (
         <span
-          title="User must set a personal password on next sign-in."
+          title="User must choose a personal password on next sign-in."
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800 whitespace-nowrap"
         >
-          Password setup required
+          First-login password change
         </span>
       )}
     </div>
@@ -126,33 +119,45 @@ export const ProvisioningServiceBanner: React.FC<{
 };
 
 interface RegistrationAccountAccessSectionProps {
+  role: PortalAccountRole;
   roleLabel: string;
   loginEmail: string;
+  admissionNoPreview?: string;
   createAccountNow: boolean;
   onToggleCreateAccountNow: (checked: boolean) => void;
   mode: AccountProvisioningMode;
   onModeChange: (mode: AccountProvisioningMode) => void;
-  useCustomTempPassword: boolean;
-  onToggleUseCustomTempPassword: (checked: boolean) => void;
-  customTempPassword: string;
-  onCustomTempPasswordChange: (value: string) => void;
+  password: string;
+  onPasswordChange: (value: string) => void;
+  confirmPassword: string;
+  onConfirmPasswordChange: (value: string) => void;
+  requireChangeOnFirstLogin?: boolean;
+  onToggleRequireChangeOnFirstLogin?: (checked: boolean) => void;
   serviceAvailable: boolean | null;
 }
 
 export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAccessSectionProps> = ({
+  role,
   roleLabel,
   loginEmail,
+  admissionNoPreview,
   createAccountNow,
   onToggleCreateAccountNow,
   mode,
   onModeChange,
-  useCustomTempPassword,
-  onToggleUseCustomTempPassword,
-  customTempPassword,
-  onCustomTempPasswordChange,
+  password,
+  onPasswordChange,
+  confirmPassword,
+  onConfirmPasswordChange,
+  requireChangeOnFirstLogin = false,
+  onToggleRequireChangeOnFirstLogin,
   serviceAvailable,
 }) => {
   const [showPwd, setShowPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+
+  const isStudent = role === 'student';
+  const effectiveMode: AccountProvisioningMode = isStudent ? 'admin_password' : mode;
 
   return (
     <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
@@ -186,13 +191,27 @@ export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAcces
 
       {createAccountNow && (
         <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-700">
-          {!loginEmail.trim() && (
-            <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-2">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              <span>
-                Enter a valid, unique login email address above to provision this account.
-              </span>
+          {isStudent ? (
+            <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-[11px] text-blue-900 dark:text-blue-200 flex items-start gap-2">
+              <IdCard className="w-4 h-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
+              <div>
+                <p className="font-bold">Student Login Identifier: Admission Number</p>
+                <p className="text-[10px] opacity-90">
+                  {admissionNoPreview?.trim()
+                    ? `Student will sign in using Admission Number "${admissionNoPreview.trim().toUpperCase()}" and the password assigned below. No student email is required.`
+                    : 'A unique Admission Number (STD/YYYY/NNNN) will be generated on save. The student will sign in using that Admission Number and the password assigned below — no student email is required.'}
+                </p>
+              </div>
             </div>
+          ) : (
+            !loginEmail.trim() && (
+              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-2">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  Enter a valid, unique login email address above to provision this account.
+                </span>
+              </div>
+            )
           )}
 
           {serviceAvailable === false && (
@@ -206,67 +225,61 @@ export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAcces
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={() => onModeChange('invite')}
-              className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
-                mode === 'invite'
-                  ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
-                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white text-[11px]">
-                <Send className="w-3.5 h-3.5 text-amber-500" /> Send Invitation Email
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Recommended. Emails a secure setup link so the user sets their own password.
-              </p>
-            </button>
+          {!isStudent && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => onModeChange('admin_password')}
+                className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
+                  effectiveMode === 'admin_password'
+                    ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white text-[11px]">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-500" /> Assign Initial Password
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Recommended. Set an active login password immediately via Supabase Auth.
+                </p>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => onModeChange('temporary_password')}
-              className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
-                mode === 'temporary_password'
-                  ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
-                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white text-[11px]">
-                <KeyRound className="w-3.5 h-3.5 text-amber-500" /> Temporary Password Setup
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Generates a one-time temporary password shown once; must be changed on first login.
-              </p>
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => onModeChange('invite')}
+                className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
+                  effectiveMode === 'invite'
+                    ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white text-[11px]">
+                  <Send className="w-3.5 h-3.5 text-amber-500" /> Send Setup Invitation Email
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Emails a secure Supabase setup link so the {roleLabel} chooses their own password.
+                </p>
+              </button>
+            </div>
+          )}
 
-          {mode === 'temporary_password' && (
-            <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
-              <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={!useCustomTempPassword}
-                  onChange={(e) => onToggleUseCustomTempPassword(!e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
-                />
-                Auto-generate strong 14-character temporary password on the server (Recommended)
-              </label>
-
-              {useCustomTempPassword && (
+          {effectiveMode === 'admin_password' && (
+            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Custom Temporary Password (min 10 chars, upper, lower, number &amp; symbol)
+                    {isStudent ? 'Assign Student Password *' : 'Assign Initial Password *'}
                   </label>
                   <div className="relative">
                     <input
                       type={showPwd ? 'text' : 'password'}
+                      required={createAccountNow}
+                      minLength={8}
                       autoComplete="new-password"
-                      value={customTempPassword}
-                      onChange={(e) => onCustomTempPasswordChange(e.target.value)}
-                      placeholder="e.g. D@v1neAcad#2026"
-                      className="w-full pr-9 pl-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono"
+                      value={password}
+                      onChange={(e) => onPasswordChange(e.target.value)}
+                      placeholder="Min 8 chars (A-z, 0-9)"
+                      className="w-full pr-9 pl-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
                     />
                     <button
                       type="button"
@@ -278,6 +291,49 @@ export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAcces
                     </button>
                   </div>
                 </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Confirm Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPwd ? 'text' : 'password'}
+                      required={createAccountNow}
+                      minLength={8}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => onConfirmPasswordChange(e.target.value)}
+                      placeholder="Re-enter password"
+                      className="w-full pr-9 pl-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPwd((v) => !v)}
+                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      title={showConfirmPwd ? 'Hide password' : 'Show password'}
+                    >
+                      {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                Must be at least 8 characters and include an uppercase letter, a lowercase letter,
+                and a number.
+              </p>
+
+              {!isStudent && onToggleRequireChangeOnFirstLogin && (
+                <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={requireChangeOnFirstLogin}
+                    onChange={(e) => onToggleRequireChangeOnFirstLogin(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                  />
+                  Require {roleLabel} to choose a personal password on first sign-in
+                </label>
               )}
             </div>
           )}
@@ -285,8 +341,8 @@ export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAcces
           <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-start gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
             <span>
-              Passwords are stored exclusively in Supabase Authentication and are never written to
-              student, teacher, parent, or browser storage tables.
+              Passwords are encrypted exclusively inside Supabase Authentication, are never stored
+              in school records or browser storage, and are never displayed again after submission.
             </span>
           </p>
         </div>
@@ -298,7 +354,6 @@ export const RegistrationAccountAccessSection: React.FC<RegistrationAccountAcces
 interface AccountProvisioningModalProps {
   target: AccountTargetInfo | null;
   summary: AccountStatusSummary | null;
-  initialHandoff?: OneTimePasswordHandoff | null;
   onClose: () => void;
   onSuccessMessage?: (msg: string) => void;
 }
@@ -306,7 +361,6 @@ interface AccountProvisioningModalProps {
 export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> = ({
   target,
   summary,
-  initialHandoff = null,
   onClose,
   onSuccessMessage,
 }) => {
@@ -316,148 +370,49 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
     parents,
     provisionPortalAccount,
     resendAccountInvite,
-    sendAdminPasswordReset,
+    assignPortalAccountPassword,
     setPortalAccountEnabled,
     provisioningServiceAvailable,
   } = useSchool();
 
   const [email, setEmail] = useState('');
-  const [mode, setMode] = useState<AccountProvisioningMode>('invite');
-  const [useCustomTempPassword, setUseCustomTempPassword] = useState(false);
-  const [customTempPassword, setCustomTempPassword] = useState('');
-  const [showCustomPwd, setShowCustomPwd] = useState(false);
+  const [mode, setMode] = useState<AccountProvisioningMode>('admin_password');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [requireChangeOnFirstLogin, setRequireChangeOnFirstLogin] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
-  const [handoff, setHandoff] = useState<OneTimePasswordHandoff | null>(initialHandoff);
-  const [copiedHandoff, setCopiedHandoff] = useState(false);
-
-  useEffect(() => {
-    setHandoff(initialHandoff);
-    setCopiedHandoff(false);
-  }, [initialHandoff]);
 
   useEffect(() => {
     if (target) {
       setEmail(normalizeLoginEmail(summary?.email || target.email));
-      setMode('invite');
-      setUseCustomTempPassword(false);
-      setCustomTempPassword('');
-      setShowCustomPwd(false);
+      setMode('admin_password');
+      setPassword('');
+      setConfirmPassword('');
+      setRequireChangeOnFirstLogin(target.role !== 'student');
+      setShowPwd(false);
+      setShowConfirmPwd(false);
       setActionError(null);
       setActionSuccess(null);
     }
   }, [target, summary?.email]);
 
-  if (!target && !handoff) return null;
+  if (!target || !summary) return null;
+
+  const isStudent = target.role === 'student';
+  const isUnprovisionedOrNeedsRepair = summary.status === 'not_created' || Boolean(summary.needsRepair);
 
   const handleCloseCleanly = () => {
-    // Immediately wipe any one-time temporary password from component state
-    setHandoff(null);
-    setCustomTempPassword('');
+    setPassword('');
+    setConfirmPassword('');
     setActionError(null);
     setActionSuccess(null);
     onClose();
   };
-
-  const handleCopyHandoff = async () => {
-    if (!handoff) return;
-    const text = [
-      `Divine Academy Secondary School Portal Login`,
-      `Name: ${handoff.fullName}`,
-      `Portal Role: ${handoff.role.toUpperCase()}`,
-      `Login Email: ${handoff.email}`,
-      `One-Time Temporary Password: ${handoff.temporaryPassword}`,
-      `Note: You will be required to set a personal password immediately after first sign-in.`,
-    ].join('\n');
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedHandoff(true);
-      setTimeout(() => setCopiedHandoff(false), 2500);
-    } catch {
-      // Fallback ignored if clipboard blocked
-    }
-  };
-
-  // One-Time Temporary Password Handoff Dialog
-  if (handoff) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4">
-        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 sm:p-7 space-y-5 shadow-2xl">
-          <div className="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-serif font-bold text-lg text-slate-900 dark:text-white">
-                  Login Account Created
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  One-time temporary password handoff for {handoff.fullName}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl p-3.5 text-xs text-amber-950 dark:text-amber-200 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <span>
-              <strong>Shown once only:</strong> Copy and share this temporary password securely. It
-              is not stored in school records and cannot be retrieved again after you close this
-              window. The user will be required to change it on first login.
-            </span>
-          </div>
-
-          <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-3 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-400">Login Email</span>
-              <span className="font-mono font-semibold text-white">{handoff.email}</span>
-            </div>
-            <div className="border-t border-slate-800 pt-3 space-y-1">
-              <span className="text-[10px] uppercase tracking-wider font-bold text-amber-400 block">
-                One-Time Temporary Password
-              </span>
-              <p className="font-mono font-black text-lg tracking-wider text-amber-300 select-all break-all">
-                {handoff.temporaryPassword}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
-            <button
-              type="button"
-              onClick={() => void handleCopyHandoff()}
-              className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-bold text-xs flex items-center justify-center gap-1.5"
-            >
-              {copiedHandoff ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-500" /> Copied Credentials
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4" /> Copy Login Details
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCloseCleanly}
-              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs shadow-md"
-            >
-              I Have Saved It — Close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!target || !summary) return null;
-
-  const isUnprovisionedOrNeedsRepair = summary.status === 'not_created' || Boolean(summary.needsRepair);
 
   const handleProvisionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -465,14 +420,15 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
     setActionError(null);
     setActionSuccess(null);
 
+    const effectiveMode: AccountProvisioningMode = isStudent ? 'admin_password' : mode;
     const validation = validateProvisionRequestInput(
       {
         role: target.role,
         recordId: target.recordId,
-        email,
-        mode,
-        useCustomTempPassword,
-        temporaryPassword: customTempPassword,
+        email: isStudent ? undefined : email,
+        mode: effectiveMode,
+        password: effectiveMode === 'admin_password' ? password : undefined,
+        confirmPassword: effectiveMode === 'admin_password' ? confirmPassword : undefined,
       },
       { students, teachers, parents }
     );
@@ -488,7 +444,12 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
         recordId: target.recordId,
         email: validation.normalizedEmail,
         mode: validation.mode,
-        temporaryPassword: validation.temporaryPassword,
+        password: validation.password,
+        mustChangePassword: isStudent
+          ? false
+          : validation.mode === 'invite'
+            ? true
+            : requireChangeOnFirstLogin,
       });
 
       if (!res.ok) {
@@ -496,24 +457,62 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
         return;
       }
 
-      if (res.oneTimeTemporaryPassword) {
-        setHandoff({
-          fullName: target.fullName,
-          role: target.role,
-          email: res.email || validation.normalizedEmail,
-          temporaryPassword: res.oneTimeTemporaryPassword,
-          recoveredPartialAccount: res.recoveredPartialAccount,
-        });
-        setCustomTempPassword('');
-        onSuccessMessage?.(
-          `Login account created for ${target.fullName} with a one-time temporary password.`
-        );
-        return;
-      }
+      // Immediately clear passwords from memory after successful provisioning
+      setPassword('');
+      setConfirmPassword('');
 
       const msg =
         res.message ||
-        `Invitation email sent to ${res.email || validation.normalizedEmail} for ${target.fullName}.`;
+        (isStudent
+          ? `Student login account created for ${target.fullName} (Admission No: ${target.identifierValue}).`
+          : validation.mode === 'invite'
+            ? `Setup invitation email sent to ${res.email || validation.normalizedEmail} for ${target.fullName}.`
+            : `Login account created for ${target.fullName} (${res.email || validation.normalizedEmail}).`);
+      setActionSuccess(msg);
+      onSuccessMessage?.(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleAssignNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting) return;
+    setActionError(null);
+    setActionSuccess(null);
+
+    const pwdCheck = validatePortalPassword(password, { minLength: 8 });
+    if (isPasswordValidationFailure(pwdCheck)) {
+      setActionError(pwdCheck.error);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setActionError('New Password and Confirm Password do not match.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await assignPortalAccountPassword(
+        target.role,
+        target.recordId,
+        password,
+        isStudent ? false : requireChangeOnFirstLogin
+      );
+      if (!res.ok) {
+        setActionError(res.error || 'Could not update password for this account.');
+        return;
+      }
+
+      // Immediately clear passwords from component state
+      setPassword('');
+      setConfirmPassword('');
+
+      const msg =
+        res.message ||
+        (isStudent
+          ? `A new password has been assigned to ${target.fullName} (Admission No: ${target.identifierValue}).`
+          : `A new password has been assigned to ${target.fullName}.`);
       setActionSuccess(msg);
       onSuccessMessage?.(msg);
     } finally {
@@ -533,25 +532,6 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
         return;
       }
       const msg = res.message || `Setup invitation re-sent to ${summary.email || target.email}.`;
-      setActionSuccess(msg);
-      onSuccessMessage?.(msg);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSendPasswordReset = async () => {
-    if (submitting) return;
-    setActionError(null);
-    setActionSuccess(null);
-    setSubmitting(true);
-    try {
-      const res = await sendAdminPasswordReset(target.role, target.recordId);
-      if (!res.ok) {
-        setActionError(res.error || 'Could not send password reset email.');
-        return;
-      }
-      const msg = res.message || `Password reset email sent to ${summary.email || target.email}.`;
       setActionSuccess(msg);
       onSuccessMessage?.(msg);
     } finally {
@@ -619,14 +599,16 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
             </span>
             <AccountStatusBadge summary={summary} />
           </div>
-          {(summary.email || target.email) && (
-            <div className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="text-slate-500">Login Email</span>
-              <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
-                {summary.email || target.email}
-              </span>
-            </div>
-          )}
+
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-slate-500">
+              {isStudent ? 'Student Login Identifier' : 'Login Email'}
+            </span>
+            <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+              {isStudent ? target.identifierValue : summary.email || target.email || 'Not set'}
+            </span>
+          </div>
+
           {summary.lastSignInAt && (
             <div className="flex items-center justify-between gap-2 text-[11px]">
               <span className="text-slate-500">Last Sign-In</span>
@@ -663,100 +645,150 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
 
         {isUnprovisionedOrNeedsRepair ? (
           <form onSubmit={handleProvisionSubmit} className="space-y-4">
-            <div>
-              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                <Mail className="w-3.5 h-3.5 text-amber-500" /> Approved Login Email Address *
-              </label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  setActionError(null);
-                }}
-                placeholder="e.g. user@divineacademy.edu"
-                className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-              />
-              <p className="text-[10px] text-slate-500 mt-1">
-                Must be a valid, unique email address for this user&apos;s Supabase Authentication
-                identity.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setMode('invite')}
-                className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
-                  mode === 'invite'
-                    ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
-                    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
-                  <Send className="w-3.5 h-3.5 text-amber-500" /> Send Invitation Email
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Sends a Supabase setup email so the user sets their own password.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMode('temporary_password')}
-                className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
-                  mode === 'temporary_password'
-                    ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
-                    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
-                  <KeyRound className="w-3.5 h-3.5 text-amber-500" /> Temporary Password
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Creates an active login with a one-time password required to change on first
-                  sign-in.
-                </p>
-              </button>
-            </div>
-
-            {mode === 'temporary_password' && (
-              <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
-                <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={!useCustomTempPassword}
-                    onChange={(e) => setUseCustomTempPassword(!e.target.checked)}
-                    className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500"
-                  />
-                  Auto-generate strong temporary password on server (Recommended)
+            {isStudent ? (
+              <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-[11px] text-blue-900 dark:text-blue-200 flex items-start gap-2">
+                <IdCard className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                <span>
+                  This student will log in using their Admission Number{' '}
+                  <strong className="font-mono">{target.identifierValue}</strong> and the password
+                  you assign below. No student personal email address is required.
+                </span>
+              </div>
+            ) : (
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-amber-500" /> Approved Login Email Address *
                 </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setActionError(null);
+                  }}
+                  placeholder="e.g. user@divineacademy.edu"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Must be a valid, unique email address for this user&apos;s Supabase Authentication
+                  identity.
+                </p>
+              </div>
+            )}
 
-                {useCustomTempPassword && (
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Temporary Password (min 10 chars, upper, lower, number &amp; symbol)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showCustomPwd ? 'text' : 'password'}
-                        required
-                        autoComplete="new-password"
-                        value={customTempPassword}
-                        onChange={(e) => setCustomTempPassword(e.target.value)}
-                        className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowCustomPwd((v) => !v)}
-                        className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-                      >
-                        {showCustomPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
+            {!isStudent && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setMode('admin_password')}
+                  className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
+                    mode === 'admin_password'
+                      ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
+                      : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+                    <KeyRound className="w-3.5 h-3.5 text-amber-500" /> Assign Initial Password
                   </div>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Creates an active login immediately using the password you assign below.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMode('invite')}
+                  className={`p-3 rounded-xl border text-left transition-all space-y-1 ${
+                    mode === 'invite'
+                      ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/40 ring-1 ring-amber-400'
+                      : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+                    <Send className="w-3.5 h-3.5 text-amber-500" /> Send Setup Invitation
+                  </div>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Sends a Supabase setup email so the user sets their own password.
+                  </p>
+                </button>
+              </div>
+            )}
+
+            {(isStudent || mode === 'admin_password') && (
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    {isStudent ? 'Student Portal Password *' : 'Initial Portal Password *'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPwd ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      autoComplete="new-password"
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setActionError(null);
+                      }}
+                      placeholder="Min 8 chars, uppercase, lowercase & number"
+                      className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPwd((v) => !v)}
+                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    >
+                      {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Confirm Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showConfirmPwd ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => {
+                        setConfirmPassword(e.target.value);
+                        setActionError(null);
+                      }}
+                      placeholder="Re-enter password to confirm"
+                      className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPwd((v) => !v)}
+                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    >
+                      {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {!isStudent && (
+                  <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={requireChangeOnFirstLogin}
+                      onChange={(e) => setRequireChangeOnFirstLogin(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500"
+                    />
+                    Require user to choose a personal password on first sign-in
+                  </label>
                 )}
+
+                <p className="text-[10px] text-slate-500">
+                  The password is saved securely in Supabase Auth and is never stored in school
+                  records or shown again after submission.
+                </p>
               </div>
             )}
 
@@ -777,22 +809,122 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
                 {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {submitting
                   ? 'Provisioning...'
-                  : mode === 'invite'
+                  : !isStudent && mode === 'invite'
                     ? 'Create Account & Send Invite'
-                    : 'Create Account & Issue Temp Password'}
+                    : 'Create Portal Login Account'}
               </button>
             </div>
           </form>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
               Existing passwords are encrypted inside Supabase Authentication and can never be
-              viewed or retrieved. Use the secure recovery actions below to help this user regain
-              access or manage account status.
+              viewed or retrieved. As an authorized administrator, you may assign a new password or
+              update this account&apos;s access status below.
             </p>
 
+            {/* Administrator Password Assignment Form */}
+            {summary.status !== 'disabled' && (
+              <form
+                onSubmit={handleAssignNewPassword}
+                className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+                  <KeyRound className="w-4 h-4 text-amber-500" />
+                  Assign New Password
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      New Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPwd ? 'text' : 'password'}
+                        required
+                        minLength={8}
+                        autoComplete="new-password"
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          setActionError(null);
+                        }}
+                        placeholder="Min 8 chars (A-z, 0-9)"
+                        className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPwd((v) => !v)}
+                        className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      >
+                        {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Confirm Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showConfirmPwd ? 'text' : 'password'}
+                        required
+                        minLength={8}
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => {
+                          setConfirmPassword(e.target.value);
+                          setActionError(null);
+                        }}
+                        placeholder="Re-enter password"
+                        className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPwd((v) => !v)}
+                        className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      >
+                        {showConfirmPwd ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {!isStudent && (
+                  <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={requireChangeOnFirstLogin}
+                      onChange={(e) => setRequireChangeOnFirstLogin(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500"
+                    />
+                    Require user to change password on next sign-in
+                  </label>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-amber-500 hover:bg-slate-800 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {submitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="w-4 h-4" />
+                  )}
+                  {submitting ? 'Updating Password...' : 'Save New Assigned Password'}
+                </button>
+              </form>
+            )}
+
             <div className="space-y-2">
-              {summary.status === 'invitation_pending' && (
+              {!isStudent && summary.status === 'invitation_pending' && (
                 <button
                   type="button"
                   disabled={submitting}
@@ -805,22 +937,6 @@ export const AccountProvisioningModal: React.FC<AccountProvisioningModalProps> =
                     <Send className="w-4 h-4" />
                   )}
                   Resend Setup Invitation Email
-                </button>
-              )}
-
-              {summary.status !== 'disabled' && (
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => void handleSendPasswordReset()}
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold flex items-center justify-center gap-2 border border-slate-700 disabled:opacity-60"
-                >
-                  {submitting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <KeyRound className="w-4 h-4 text-amber-400" />
-                  )}
-                  Send Password Reset Email
                 </button>
               )}
 
