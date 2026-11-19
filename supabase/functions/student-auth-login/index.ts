@@ -6,6 +6,12 @@
  *   - Supabase Dashboard -> Edge Functions -> Deploy a new function -> Via Editor
  *   - Supabase CLI (`npx supabase functions deploy student-auth-login --no-verify-jwt`)
  *
+ * PREREQUISITE MIGRATION (REQUIRED BEFORE ENABLING STUDENT LOGIN):
+ *   Review and apply `supabase/migrations/20260502_student_login_rate_limits.sql`
+ *   in Supabase SQL Editor so the persistent PostgreSQL rate-limiting table and
+ *   `service_role`-only RPCs are installed. This function fails closed with
+ *   HTTP 503 if any required rate-limiting RPC is missing or fails.
+ *
  * IMPORTANT GATEWAY SETTING:
  *   Disable JWT verification at the Edge Function gateway (`--no-verify-jwt` or
  *   "Verify JWT with legacy secret" / "Enforce JWT Verification" OFF in Dashboard),
@@ -13,14 +19,16 @@
  *
  * Security guarantees enforced strictly on the server:
  *  1. Accepts ONLY `{ admissionNo, password }` over HTTP POST.
- *  2. Enforces persistent, atomic rate limiting across all Edge Function instances via
- *     PostgreSQL `service_role`-only RPCs (`consume_student_login_attempt`,
+ *  2. Enforces mandatory persistent, atomic rate limiting across all Edge Function
+ *     instances via PostgreSQL `service_role`-only RPCs (`consume_student_login_attempt`,
  *     `clear_student_login_rate_limit`, `release_student_login_attempt`) using SHA-256
- *     hashed IP and Admission Number bucket keys — with a bounded in-memory sliding-window
- *     fallback if the optional SQL migration has not been applied yet.
+ *     hashed IP and Admission Number bucket keys — with NO in-memory fallback.
+ *     If any required rate-limiting RPC is missing or fails, returns HTTP 503 with a
+ *     generic service-unavailable message without processing login credentials or
+ *     leaking database details.
  *  3. Resolves `admission_no -> public.students.auth_user_id -> public.user_profiles -> auth.users`
  *     strictly on the server using privileged `service_role` access; NEVER exposes
- *     service-role credentials, passwords, or internal student emails to the frontend.
+ *     service-role credentials, passwords, internal student emails, or database errors.
  *  4. Strictly verifies that:
  *       - Exactly one `public.students` row matches the normalized Admission Number,
  *         has `status = 'Active'`, and has a valid `auth_user_id` not shared with any
@@ -138,8 +146,15 @@ function jsonResponse(
 }
 
 // ============================================================================
-// 2. TYPES, VALIDATION & FALLBACK SLIDING-WINDOW RATE LIMITER
+// 2. TYPES, VALIDATION & RATE-LIMIT ERROR BOUNDARY
 // ============================================================================
+
+class RateLimitServiceUnavailableError extends Error {
+  constructor() {
+    super('Rate-limit service unavailable');
+    this.name = 'RateLimitServiceUnavailableError';
+  }
+}
 
 interface StudentIdentityLookup {
   studentId: string;
@@ -164,6 +179,7 @@ interface StudentIdentityLookup {
 interface RateLimitConsumeResult {
   allowed: boolean;
   retryAfterSeconds: number;
+  remainingAttempts: number;
 }
 
 interface VerifiedSupabaseSession {
@@ -189,7 +205,7 @@ interface StudentLoginAdapter {
     authEmail: string,
     password: string,
     expectedAuthUserId: string
-  ): Promise<{ session: VerifiedSupabaseSession | null; error?: string }>;
+  ): Promise<{ session: VerifiedSupabaseSession | null }>;
 }
 
 interface StudentLoginHttpResult {
@@ -202,13 +218,14 @@ const ADMISSION_PATTERN = /^[A-Z0-9][A-Z0-9/-]{2,31}$/;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UNIFORM_AUTH_ERROR = 'Invalid admission number or password.';
+const SERVICE_UNAVAILABLE_ERROR =
+  'Student sign-in service is temporarily unavailable. Please try again later.';
 
 const STUDENT_LOGIN_RATE_LIMITS = {
   perAdmissionMaxAttempts: 5,
   perAdmissionWindowSeconds: 15 * 60, // 15 minutes
   perIpMaxAttempts: 20,
   perIpWindowSeconds: 15 * 60, // 15 minutes
-  maxTrackedFallbackBuckets: 5000,
 };
 
 function normalizeAdmissionNoForLogin(raw: unknown): string {
@@ -231,87 +248,20 @@ function isNonStudentMetadataRole(value: unknown): boolean {
   return normalized !== 'student';
 }
 
-/**
- * Bounded per-isolate sliding-window fallback limiter used ONLY if the persistent
- * PostgreSQL rate-limit RPCs have not yet been installed or encounter a transient error.
- */
-class FallbackInMemoryRateLimiter {
-  private readonly buckets = new Map<string, number[]>();
-
-  private prune(bucketKey: string, windowSeconds: number, nowMs: number): number[] {
-    const cutoff = nowMs - windowSeconds * 1000;
-    const existing = this.buckets.get(bucketKey) ?? [];
-    const active = existing.filter((ts) => ts > cutoff);
-    if (active.length > 0) {
-      this.buckets.set(bucketKey, active);
-    } else {
-      this.buckets.delete(bucketKey);
-    }
-    return active;
-  }
-
-  private sweepIfOversized(windowSeconds: number, nowMs: number): void {
-    if (this.buckets.size < STUDENT_LOGIN_RATE_LIMITS.maxTrackedFallbackBuckets) return;
-    const cutoff = nowMs - windowSeconds * 1000;
-    for (const [key, timestamps] of this.buckets.entries()) {
-      const active = timestamps.filter((ts) => ts > cutoff);
-      if (active.length > 0) {
-        this.buckets.set(key, active);
-      } else {
-        this.buckets.delete(key);
-      }
-    }
-    while (this.buckets.size >= STUDENT_LOGIN_RATE_LIMITS.maxTrackedFallbackBuckets) {
-      const oldestKey = this.buckets.keys().next().value;
-      if (!oldestKey) break;
-      this.buckets.delete(oldestKey);
-    }
-  }
-
-  consume(
-    bucketKey: string,
-    maxAttempts: number,
-    windowSeconds: number,
-    nowMs = Date.now()
-  ): RateLimitConsumeResult {
-    this.sweepIfOversized(windowSeconds, nowMs);
-    const active = this.prune(bucketKey, windowSeconds, nowMs);
-    if (active.length >= maxAttempts) {
-      const oldest = active[0];
-      const retryAfterMs = Math.max(1000, oldest + windowSeconds * 1000 - nowMs);
-      return {
-        allowed: false,
-        retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
-      };
-    }
-    active.push(nowMs);
-    this.buckets.set(bucketKey, active);
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
-
-  releaseOne(bucketKey: string, windowSeconds: number, nowMs = Date.now()): void {
-    const active = this.prune(bucketKey, windowSeconds, nowMs);
-    if (active.length > 0) {
-      active.pop();
-      if (active.length > 0) {
-        this.buckets.set(bucketKey, active);
-      } else {
-        this.buckets.delete(bucketKey);
-      }
-    }
-  }
-
-  clear(bucketKey: string): void {
-    this.buckets.delete(bucketKey);
-  }
-}
-
-const fallbackLimiter = new FallbackInMemoryRateLimiter();
-let loggedMissingRateLimitRpc = false;
-
 // ============================================================================
 // 3. CORE STUDENT ADMISSION-NUMBER LOGIN HANDLER
 // ============================================================================
+
+function buildServiceUnavailableResponse(): StudentLoginHttpResult {
+  return {
+    status: 503,
+    body: {
+      ok: false,
+      code: 'service_unavailable',
+      error: SERVICE_UNAVAILABLE_ERROR,
+    },
+  };
+}
 
 function buildRateLimitedResponse(retryAfterSeconds: number): StudentLoginHttpResult {
   const safeRetrySeconds = Math.max(retryAfterSeconds, 30);
@@ -385,103 +335,105 @@ async function handleStudentLoginRequest(
     hashRateLimitBucket('adm', admissionNo),
   ]);
 
-  // 1. Atomically consume IP rate-limit slot BEFORE inspecting credentials or calling Auth
-  const ipLimit = await adapter.consumeRateLimitAttempt(
-    ipBucket,
-    STUDENT_LOGIN_RATE_LIMITS.perIpMaxAttempts,
-    STUDENT_LOGIN_RATE_LIMITS.perIpWindowSeconds
-  );
-  if (!ipLimit.allowed) {
-    return buildRateLimitedResponse(ipLimit.retryAfterSeconds);
-  }
+  try {
+    // 1. Atomically consume persistent PostgreSQL IP rate-limit slot BEFORE
+    //    inspecting credentials, querying student tables, or calling Auth.
+    //    Fails closed (HTTP 503) if the persistent RPC is missing or errors.
+    const ipLimit = await adapter.consumeRateLimitAttempt(
+      ipBucket,
+      STUDENT_LOGIN_RATE_LIMITS.perIpMaxAttempts,
+      STUDENT_LOGIN_RATE_LIMITS.perIpWindowSeconds
+    );
+    if (!ipLimit.allowed) {
+      return buildRateLimitedResponse(ipLimit.retryAfterSeconds);
+    }
 
-  if (!ADMISSION_PATTERN.test(admissionNo) || password.length > 128) {
+    if (!ADMISSION_PATTERN.test(admissionNo) || password.length > 128) {
+      return {
+        status: 401,
+        body: {
+          ok: false,
+          code: 'invalid_credentials',
+          error: UNIFORM_AUTH_ERROR,
+        },
+      };
+    }
+
+    // 2. Atomically consume persistent PostgreSQL per-Admission-Number slot
+    //    BEFORE DB/Auth lookup (eliminates concurrent multi-instance TOCTOU bursts).
+    //    Fails closed (HTTP 503) if the persistent RPC is missing or errors.
+    const admLimit = await adapter.consumeRateLimitAttempt(
+      admBucket,
+      STUDENT_LOGIN_RATE_LIMITS.perAdmissionMaxAttempts,
+      STUDENT_LOGIN_RATE_LIMITS.perAdmissionWindowSeconds
+    );
+    if (!admLimit.allowed) {
+      return buildRateLimitedResponse(admLimit.retryAfterSeconds);
+    }
+
+    // 3. Resolve and strictly validate the linked Supabase Auth student account
+    const identity = await adapter.findStudentIdentityByAdmissionNo(admissionNo);
+    if (!isVerifiedActiveStudentIdentity(identity) || !identity?.authEmail || !identity.authUserId) {
+      return {
+        status: 401,
+        body: {
+          ok: false,
+          code: 'invalid_credentials',
+          error: UNIFORM_AUTH_ERROR,
+        },
+      };
+    }
+
+    // 4. Perform real password verification strictly through Supabase Authentication
+    const authRes = await adapter.signInWithSupabasePassword(
+      identity.authEmail,
+      password,
+      identity.authUserId
+    );
+    if (!authRes.session?.access_token || !authRes.session?.refresh_token) {
+      return {
+        status: 401,
+        body: {
+          ok: false,
+          code: 'invalid_credentials',
+          error: UNIFORM_AUTH_ERROR,
+        },
+      };
+    }
+
+    // 5. Clear Admission Number failures and release the shared IP slot on valid sign-in
+    //    (prevents school lab / shared Wi-Fi students from exhausting the IP allowance).
+    //    Fails closed (HTTP 503) if either required rate-limit RPC is missing or errors.
+    await Promise.all([
+      adapter.clearRateLimitBucket(admBucket),
+      adapter.releaseRateLimitAttempt(ipBucket),
+    ]);
+
+    // SECURITY: Return ONLY short-lived Supabase session tokens (never passwords or internal emails).
     return {
-      status: 401,
+      status: 200,
       body: {
-        ok: false,
-        code: 'invalid_credentials',
-        error: UNIFORM_AUTH_ERROR,
+        ok: true,
+        session: {
+          access_token: authRes.session.access_token,
+          refresh_token: authRes.session.refresh_token,
+          expires_at: authRes.session.expires_at,
+          expires_in: authRes.session.expires_in,
+          token_type: authRes.session.token_type || 'bearer',
+        },
       },
     };
+  } catch (err) {
+    if (err instanceof RateLimitServiceUnavailableError) {
+      return buildServiceUnavailableResponse();
+    }
+    throw err;
   }
-
-  // 2. Atomically consume per-Admission-Number rate-limit slot BEFORE DB/Auth lookup
-  //    (eliminates concurrent TOCTOU bursts across multiple Edge Function instances)
-  const admLimit = await adapter.consumeRateLimitAttempt(
-    admBucket,
-    STUDENT_LOGIN_RATE_LIMITS.perAdmissionMaxAttempts,
-    STUDENT_LOGIN_RATE_LIMITS.perAdmissionWindowSeconds
-  );
-  if (!admLimit.allowed) {
-    return buildRateLimitedResponse(admLimit.retryAfterSeconds);
-  }
-
-  // 3. Resolve and strictly validate the linked Supabase Auth student account
-  const identity = await adapter.findStudentIdentityByAdmissionNo(admissionNo);
-  if (!isVerifiedActiveStudentIdentity(identity) || !identity?.authEmail || !identity.authUserId) {
-    return {
-      status: 401,
-      body: {
-        ok: false,
-        code: 'invalid_credentials',
-        error: UNIFORM_AUTH_ERROR,
-      },
-    };
-  }
-
-  // 4. Perform real password verification strictly through Supabase Authentication
-  const authRes = await adapter.signInWithSupabasePassword(
-    identity.authEmail,
-    password,
-    identity.authUserId
-  );
-  if (!authRes.session?.access_token || !authRes.session?.refresh_token) {
-    return {
-      status: 401,
-      body: {
-        ok: false,
-        code: 'invalid_credentials',
-        error: UNIFORM_AUTH_ERROR,
-      },
-    };
-  }
-
-  // 5. Clear Admission Number failures and release the shared IP slot on valid sign-in
-  //    (prevents school lab / shared Wi-Fi students from exhausting the IP allowance)
-  await Promise.all([
-    adapter.clearRateLimitBucket(admBucket),
-    adapter.releaseRateLimitAttempt(ipBucket),
-  ]);
-
-  // SECURITY: Return ONLY short-lived Supabase session tokens (never passwords or internal emails).
-  return {
-    status: 200,
-    body: {
-      ok: true,
-      session: {
-        access_token: authRes.session.access_token,
-        refresh_token: authRes.session.refresh_token,
-        expires_at: authRes.session.expires_at,
-        expires_in: authRes.session.expires_in,
-        token_type: authRes.session.token_type || 'bearer',
-      },
-    },
-  };
 }
 
 // ============================================================================
-// 4. SUPABASE BACKEND ADAPTER
+// 4. SUPABASE BACKEND ADAPTER (PERSISTENT POSTGRESQL RATE LIMITING REQUIRED)
 // ============================================================================
-
-function isMissingRpcError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  return (
-    error.code === 'PGRST202' ||
-    error.code === '42883' ||
-    /could not find the function|function .* does not exist/i.test(error.message ?? '')
-  );
-}
 
 function createSupabaseStudentLoginAdapter(
   adminClient: SupabaseClient,
@@ -501,70 +453,93 @@ function createSupabaseStudentLoginAdapter(
           p_window_seconds: windowSeconds,
         });
 
-        if (!error) {
-          const row = (Array.isArray(data) ? data[0] : data) as
-            | {
-                out_allowed?: boolean;
-                out_retry_after_seconds?: number;
-              }
-            | null
-            | undefined;
-
-          if (row && typeof row.out_allowed === 'boolean') {
-            return {
-              allowed: row.out_allowed,
-              retryAfterSeconds:
-                typeof row.out_retry_after_seconds === 'number'
-                  ? row.out_retry_after_seconds
-                  : 0,
-            };
-          }
-        } else if (isMissingRpcError(error)) {
-          if (!loggedMissingRateLimitRpc) {
-            loggedMissingRateLimitRpc = true;
-            console.warn(
-              '[student-auth-login] Persistent rate-limit RPC not installed yet; using bounded in-memory fallback until migration 20260502_student_login_rate_limits.sql is applied.'
-            );
-          }
-        } else {
-          console.error('[student-auth-login] Rate-limit RPC error:', error.message);
+        if (error) {
+          console.error(
+            `[student-auth-login] Persistent rate-limit RPC "consume_student_login_attempt" failed (code: ${error.code || 'unknown'}).`
+          );
+          throw new RateLimitServiceUnavailableError();
         }
-      } catch (err) {
-        console.error(
-          '[student-auth-login] Rate-limit RPC exception:',
-          err instanceof Error ? err.message : 'unknown'
-        );
-      }
 
-      // Fallback keeps rate limiting active before migration or during transient DB errors
-      return fallbackLimiter.consume(bucketKey, maxAttempts, windowSeconds);
+        const row = (Array.isArray(data) ? data[0] : data) as
+          | {
+              out_allowed?: unknown;
+              out_retry_after_seconds?: unknown;
+              out_remaining_attempts?: unknown;
+            }
+          | null
+          | undefined;
+
+        if (
+          !row ||
+          typeof row.out_allowed !== 'boolean' ||
+          typeof row.out_retry_after_seconds !== 'number' ||
+          !Number.isFinite(row.out_retry_after_seconds) ||
+          typeof row.out_remaining_attempts !== 'number' ||
+          !Number.isFinite(row.out_remaining_attempts)
+        ) {
+          console.error(
+            '[student-auth-login] Persistent rate-limit RPC "consume_student_login_attempt" returned an invalid response shape.'
+          );
+          throw new RateLimitServiceUnavailableError();
+        }
+
+        return {
+          allowed: row.out_allowed,
+          retryAfterSeconds: Math.max(0, Math.trunc(row.out_retry_after_seconds)),
+          remainingAttempts: Math.max(0, Math.trunc(row.out_remaining_attempts)),
+        };
+      } catch (err) {
+        if (err instanceof RateLimitServiceUnavailableError) {
+          throw err;
+        }
+        console.error(
+          '[student-auth-login] Persistent rate-limit RPC "consume_student_login_attempt" threw an exception.'
+        );
+        throw new RateLimitServiceUnavailableError();
+      }
     },
 
     async clearRateLimitBucket(bucketKey: string): Promise<void> {
-      fallbackLimiter.clear(bucketKey);
       try {
         const { error } = await adminClient.rpc('clear_student_login_rate_limit', {
           p_bucket_key: bucketKey,
         });
-        if (error && !isMissingRpcError(error)) {
-          console.warn('[student-auth-login] clear_student_login_rate_limit error:', error.message);
+        if (error) {
+          console.error(
+            `[student-auth-login] Persistent rate-limit RPC "clear_student_login_rate_limit" failed (code: ${error.code || 'unknown'}).`
+          );
+          throw new RateLimitServiceUnavailableError();
         }
-      } catch {
-        // Non-fatal on successful authentication
+      } catch (err) {
+        if (err instanceof RateLimitServiceUnavailableError) {
+          throw err;
+        }
+        console.error(
+          '[student-auth-login] Persistent rate-limit RPC "clear_student_login_rate_limit" threw an exception.'
+        );
+        throw new RateLimitServiceUnavailableError();
       }
     },
 
     async releaseRateLimitAttempt(bucketKey: string): Promise<void> {
-      fallbackLimiter.releaseOne(bucketKey, STUDENT_LOGIN_RATE_LIMITS.perIpWindowSeconds);
       try {
         const { error } = await adminClient.rpc('release_student_login_attempt', {
           p_bucket_key: bucketKey,
         });
-        if (error && !isMissingRpcError(error)) {
-          console.warn('[student-auth-login] release_student_login_attempt error:', error.message);
+        if (error) {
+          console.error(
+            `[student-auth-login] Persistent rate-limit RPC "release_student_login_attempt" failed (code: ${error.code || 'unknown'}).`
+          );
+          throw new RateLimitServiceUnavailableError();
         }
-      } catch {
-        // Non-fatal on successful authentication
+      } catch (err) {
+        if (err instanceof RateLimitServiceUnavailableError) {
+          throw err;
+        }
+        console.error(
+          '[student-auth-login] Persistent rate-limit RPC "release_student_login_attempt" threw an exception.'
+        );
+        throw new RateLimitServiceUnavailableError();
       }
     },
 
@@ -789,7 +764,7 @@ function createSupabaseStudentLoginAdapter(
         !data.session?.refresh_token ||
         verifiedUserId !== expectedAuthUserId
       ) {
-        return { session: null, error: error?.message || 'Invalid credentials.' };
+        return { session: null };
       }
 
       return {
@@ -830,12 +805,13 @@ Deno.serve(async (req: Request) => {
   const anonKey = resolveAnonKey();
 
   if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+    console.error('[student-auth-login] Required server authentication configuration is missing.');
     return jsonResponse(
-      500,
+      503,
       {
         ok: false,
-        code: 'server_misconfigured',
-        error: 'Supabase authentication function environment variables are not configured.',
+        code: 'service_unavailable',
+        error: SERVICE_UNAVAILABLE_ERROR,
       },
       corsHeaders
     );
@@ -876,9 +852,20 @@ Deno.serve(async (req: Request) => {
     const result = await handleStudentLoginRequest({ body, clientIp }, adapter);
     return jsonResponse(result.status, result.body, corsHeaders, result.headers);
   } catch (err) {
+    if (err instanceof RateLimitServiceUnavailableError) {
+      return jsonResponse(
+        503,
+        {
+          ok: false,
+          code: 'service_unavailable',
+          error: SERVICE_UNAVAILABLE_ERROR,
+        },
+        corsHeaders
+      );
+    }
     console.error(
       '[student-auth-login] Unhandled error:',
-      err instanceof Error ? err.message : 'unknown'
+      err instanceof Error ? err.name : 'unknown'
     );
     return jsonResponse(
       500,

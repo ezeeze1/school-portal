@@ -12,7 +12,9 @@
 --      numbers, emails, or passwords).
 --   5. Strictly locked down to `service_role` (RLS enabled with zero client
 --      policies; all privileges revoked from PUBLIC, anon, and authenticated).
---   6. Safe and idempotent to review and execute manually in Supabase SQL Editor.
+--   6. Every SECURITY DEFINER function runs with a fixed empty search_path
+--      (`SET search_path = ''`) and explicitly schema-qualified objects.
+--   7. Safe and idempotent to review and execute manually in Supabase SQL Editor.
 -- ============================================================================
 
 BEGIN;
@@ -21,10 +23,10 @@ BEGIN;
 -- 1. RATE-LIMIT STATE TABLE (SERVICE_ROLE ONLY)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.student_login_rate_limits (
-  bucket_key text PRIMARY KEY CHECK (length(trim(bucket_key)) BETWEEN 1 AND 128),
+  bucket_key text PRIMARY KEY CHECK (pg_catalog.length(pg_catalog.btrim(bucket_key)) BETWEEN 1 AND 128),
   attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   window_expires_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT pg_catalog.now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_student_login_rate_limits_updated_at
@@ -53,16 +55,16 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
-  v_key text := trim(COALESCE(p_bucket_key, ''));
-  v_now timestamptz := now();
+  v_key text := pg_catalog.btrim(COALESCE(p_bucket_key, ''));
+  v_now timestamptz := pg_catalog.now();
   v_count integer;
   v_expires_at timestamptz;
   v_retry integer;
 BEGIN
-  IF v_key = '' OR length(v_key) > 128 THEN
+  IF v_key = '' OR pg_catalog.length(v_key) > 128 THEN
     RAISE EXCEPTION 'Invalid rate-limit bucket key.';
   END IF;
   IF p_max_attempts IS NULL OR p_max_attempts < 1 OR p_max_attempts > 10000 THEN
@@ -90,7 +92,7 @@ BEGIN
 
     SELECT rl.attempt_count, rl.window_expires_at
       INTO v_count, v_expires_at
-    FROM public.student_login_rate_limits rl
+    FROM public.student_login_rate_limits AS rl
     WHERE rl.bucket_key = v_key
     FOR UPDATE;
 
@@ -99,9 +101,9 @@ BEGIN
 
   -- Expired, cleared, or brand-new window: reset counter to 1 and start a fresh window
   IF v_expires_at <= v_now THEN
-    UPDATE public.student_login_rate_limits rl
+    UPDATE public.student_login_rate_limits AS rl
     SET attempt_count = 1,
-        window_expires_at = v_now + make_interval(secs => p_window_seconds),
+        window_expires_at = v_now + pg_catalog.make_interval(secs => p_window_seconds::double precision),
         updated_at = v_now
     WHERE rl.bucket_key = v_key;
 
@@ -111,13 +113,13 @@ BEGIN
 
   -- Active window already exhausted: reject with remaining lock duration
   IF v_count >= p_max_attempts THEN
-    v_retry := GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_expires_at - v_now)))::integer);
+    v_retry := GREATEST(1, pg_catalog.ceil(EXTRACT(EPOCH FROM (v_expires_at - v_now)))::integer);
     RETURN QUERY SELECT false, v_retry, 0;
     RETURN;
   END IF;
 
   -- Active window still has budget: atomically consume one attempt
-  UPDATE public.student_login_rate_limits rl
+  UPDATE public.student_login_rate_limits AS rl
   SET attempt_count = v_count + 1,
       updated_at = v_now
   WHERE rl.bucket_key = v_key;
@@ -135,17 +137,17 @@ CREATE OR REPLACE FUNCTION public.clear_student_login_rate_limit(
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
-  v_key text := trim(COALESCE(p_bucket_key, ''));
-  v_now timestamptz := now();
+  v_key text := pg_catalog.btrim(COALESCE(p_bucket_key, ''));
+  v_now timestamptz := pg_catalog.now();
 BEGIN
-  IF v_key = '' OR length(v_key) > 128 THEN
-    RETURN;
+  IF v_key = '' OR pg_catalog.length(v_key) > 128 THEN
+    RAISE EXCEPTION 'Invalid rate-limit bucket key.';
   END IF;
 
-  UPDATE public.student_login_rate_limits rl
+  UPDATE public.student_login_rate_limits AS rl
   SET attempt_count = 0,
       window_expires_at = v_now,
       updated_at = v_now
@@ -164,17 +166,17 @@ CREATE OR REPLACE FUNCTION public.release_student_login_attempt(
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
-  v_key text := trim(COALESCE(p_bucket_key, ''));
-  v_now timestamptz := now();
+  v_key text := pg_catalog.btrim(COALESCE(p_bucket_key, ''));
+  v_now timestamptz := pg_catalog.now();
 BEGIN
-  IF v_key = '' OR length(v_key) > 128 THEN
-    RETURN;
+  IF v_key = '' OR pg_catalog.length(v_key) > 128 THEN
+    RAISE EXCEPTION 'Invalid rate-limit bucket key.';
   END IF;
 
-  UPDATE public.student_login_rate_limits rl
+  UPDATE public.student_login_rate_limits AS rl
   SET attempt_count = GREATEST(0, rl.attempt_count - 1),
       updated_at = v_now
   WHERE rl.bucket_key = v_key
@@ -191,15 +193,16 @@ CREATE OR REPLACE FUNCTION public.prune_student_login_rate_limits(
 RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = ''
 AS $$
 DECLARE
   v_hours integer := GREATEST(1, COALESCE(p_older_than_hours, 24));
+  v_now timestamptz := pg_catalog.now();
   v_deleted integer := 0;
 BEGIN
-  DELETE FROM public.student_login_rate_limits rl
-  WHERE rl.window_expires_at < now()
-    AND rl.updated_at < now() - make_interval(hours => v_hours);
+  DELETE FROM public.student_login_rate_limits AS rl
+  WHERE rl.window_expires_at < v_now
+    AND rl.updated_at < v_now - pg_catalog.make_interval(hours => v_hours);
 
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
   RETURN v_deleted;

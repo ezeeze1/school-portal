@@ -12,10 +12,10 @@ Review and run these non-destructive, idempotent SQL migration files in **Supaba
    - Adds additive metadata columns on `public.user_profiles` (`account_status`, `must_change_password`, `invited_at`, `activated_at`).
    - Adds uniqueness guards (`uq_user_profiles_role_reference`, `uq_user_profiles_email_lower`, and `uq_students_admission_no_normalized` on `public.students (lower(trim(admission_no)))`).
    - Installs least-privilege RPCs (`get_admin_account_statuses`, `get_my_account_security_state`, `complete_my_password_setup`).
-2. `supabase/migrations/20260502_student_login_rate_limits.sql` (Recommended for persistent cross-instance atomic rate limiting):
+2. `supabase/migrations/20260502_student_login_rate_limits.sql` (**Required before enabling Student Admission-Number login**):
    - Creates `public.student_login_rate_limits` (RLS enabled, `service_role`-only, stores SHA-256 hashed bucket keys only — zero plaintext IPs or admission numbers).
-   - Installs atomic row-locked RPCs (`consume_student_login_attempt`, `clear_student_login_rate_limit`, `release_student_login_attempt`, `prune_student_login_rate_limits`) granted exclusively to `service_role`.
-   - `student-auth-login` automatically uses these atomic PostgreSQL RPCs once applied, and safely falls back to a bounded in-memory sliding-window limiter beforehand.
+   - Installs atomic row-locked `SECURITY DEFINER` RPCs (`SET search_path = ''`, explicitly schema-qualified): `consume_student_login_attempt`, `clear_student_login_rate_limit`, `release_student_login_attempt`, and `prune_student_login_rate_limits`, granted exclusively to `service_role`.
+   - `student-auth-login` requires these persistent PostgreSQL RPCs (no in-memory fallback) and fails closed with HTTP `503` if any required rate-limiting RPC is missing or unavailable.
 
 > Neither migration drops, alters, or weakens any of the 27 existing portal tables, 74 existing RLS policies, student records, or administrator accounts.
 
