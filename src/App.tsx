@@ -3,7 +3,8 @@ import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
 import { WhatsAppButton } from './components/common/WhatsAppButton';
-import { KeyRound, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { KeyRound, CheckCircle2, AlertCircle, X, ShieldAlert, LogOut } from 'lucide-react';
+import { isPasswordValidationFailure, validatePortalPassword } from './lib/accountProvisioning';
 
 // Public Pages
 import { HomePage } from './components/public/HomePage';
@@ -22,22 +23,35 @@ import { ParentPortalLayout } from './components/parent/ParentPortalLayout';
 import { AdminPortalLayout } from './components/admin/AdminPortalLayout';
 
 const PasswordRecoveryModal: React.FC = () => {
-  const { authRecoveryMode, dismissAuthRecovery, updatePassword } = useSchool();
+  const {
+    authRecoveryMode,
+    mustChangePassword,
+    activeRole,
+    currentUser,
+    dismissAuthRecovery,
+    updatePassword,
+    logout,
+  } = useSchool();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
 
-  if (!authRecoveryMode) return null;
+  const isAuthenticatedUser = activeRole !== 'public' && currentUser?.role === activeRole;
+  const isMandatoryFirstLogin = mustChangePassword && isAuthenticatedUser;
+  const isOpen = authRecoveryMode || isMandatoryFirstLogin;
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters long.');
+    const validation = validatePortalPassword(newPassword, { minLength: 8 });
+    if (isPasswordValidationFailure(validation)) {
+      setError(validation.error);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -52,7 +66,7 @@ const PasswordRecoveryModal: React.FC = () => {
         setError(res.error || 'Could not update password.');
         return;
       }
-      setSuccess('Your password has been updated successfully.');
+      setSuccess('Your password has been updated securely.');
       setNewPassword('');
       setConfirmPassword('');
     } finally {
@@ -61,23 +75,37 @@ const PasswordRecoveryModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-md p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/85 backdrop-blur-md p-4">
       <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 dark:border-slate-800 p-6 space-y-4">
         <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
           <div className="flex items-center gap-2">
-            <KeyRound className="w-5 h-5 text-amber-500" />
+            {isMandatoryFirstLogin ? (
+              <ShieldAlert className="w-5 h-5 text-amber-500" />
+            ) : (
+              <KeyRound className="w-5 h-5 text-amber-500" />
+            )}
             <h3 className="font-serif font-bold text-lg text-slate-900 dark:text-white">
-              Set New Account Password
+              {isMandatoryFirstLogin ? 'Complete First-Login Password Setup' : 'Set New Account Password'}
             </h3>
           </div>
-          <button
-            type="button"
-            onClick={dismissAuthRecovery}
-            className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!isMandatoryFirstLogin && (
+            <button
+              type="button"
+              onClick={dismissAuthRecovery}
+              className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
+
+        {isMandatoryFirstLogin && (
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+            Your account was provisioned with a temporary or initial setup password. For your
+            security, please choose a personal password (at least 8 characters with uppercase,
+            lowercase, and a number) before continuing to your portal.
+          </div>
+        )}
 
         {error && (
           <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs font-bold text-red-600 dark:text-red-400 flex items-center gap-2">
@@ -96,12 +124,13 @@ const PasswordRecoveryModal: React.FC = () => {
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
             <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              New Password (min 8 characters)
+              New Password (min 8 chars, upper, lower & number)
             </label>
             <input
               type="password"
               required
               minLength={8}
+              autoComplete="new-password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
@@ -115,6 +144,7 @@ const PasswordRecoveryModal: React.FC = () => {
               type="password"
               required
               minLength={8}
+              autoComplete="new-password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
@@ -125,8 +155,22 @@ const PasswordRecoveryModal: React.FC = () => {
             disabled={saving}
             className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2.5 rounded-xl transition-colors disabled:opacity-60"
           >
-            {saving ? 'Updating Password...' : 'Update Password'}
+            {saving
+              ? 'Updating Password...'
+              : isMandatoryFirstLogin
+                ? 'Save Personal Password & Continue'
+                : 'Update Password'}
           </button>
+
+          {isMandatoryFirstLogin && (
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="w-full py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold flex items-center justify-center gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Sign Out Instead
+            </button>
+          )}
         </form>
       </div>
     </div>

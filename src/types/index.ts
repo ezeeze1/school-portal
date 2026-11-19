@@ -8,6 +8,51 @@ export interface AdminCredentials {
   isBootstrapped?: boolean;
 }
 
+export type PortalAccountRole = 'student' | 'teacher' | 'parent';
+
+export type AccountProvisioningStatus =
+  | 'not_created'
+  | 'invitation_pending'
+  | 'active'
+  | 'disabled';
+
+export type AccountProvisioningMode = 'invite' | 'temporary_password';
+
+export interface AccountStatusSummary {
+  role: PortalAccountRole;
+  recordId: string;
+  authUserId?: string;
+  email?: string;
+  status: AccountProvisioningStatus;
+  mustChangePassword: boolean;
+  invitedAt?: string;
+  lastSignInAt?: string;
+  needsRepair?: boolean;
+  source: 'edge_function' | 'rpc' | 'profiles_table';
+}
+
+export interface ProvisionAccountRequest {
+  role: PortalAccountRole;
+  recordId: string;
+  email: string;
+  mode: AccountProvisioningMode;
+  temporaryPassword?: string;
+  redirectTo?: string;
+}
+
+export interface ProvisionAccountResult {
+  ok: boolean;
+  status?: AccountProvisioningStatus;
+  authUserId?: string;
+  email?: string;
+  mode?: AccountProvisioningMode;
+  oneTimeTemporaryPassword?: string;
+  recoveredPartialAccount?: boolean;
+  message?: string;
+  error?: string;
+  code?: string;
+}
+
 export interface UserProfile {
   authUserId: string;
   role: Exclude<UserRole, 'public'>;
@@ -15,6 +60,8 @@ export interface UserProfile {
   email: string;
   fullName?: string;
   isActive: boolean;
+  accountStatus?: Exclude<AccountProvisioningStatus, 'not_created'>;
+  mustChangePassword?: boolean;
 }
 
 export interface User {

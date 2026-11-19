@@ -24,6 +24,11 @@ import {
   SystemSessionTerm,
   UserProfile,
   UserRole,
+  AccountProvisioningStatus,
+  AccountStatusSummary,
+  PortalAccountRole,
+  ProvisionAccountRequest,
+  ProvisionAccountResult,
 } from '../types';
 import {
   ClassDependencyCounts,
@@ -31,6 +36,10 @@ import {
   formatSupabaseClassError,
   sortSchoolClasses,
 } from '../lib/classManagement';
+import {
+  formatRecordPersistenceError,
+  makeAccountStatusKey,
+} from '../lib/accountProvisioning';
 
 export interface SupabasePortalSnapshot {
   systemSettings?: SystemSessionTerm;
@@ -773,6 +782,120 @@ async function safeDeleteByIds(table: string, ids: string[]): Promise<void> {
   }
 }
 
+interface EdgeInvokeResponse {
+  ok: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+  code?: string;
+  edgeFunctionUnavailable?: boolean;
+}
+
+async function invokeAdminProvisioningFunction(
+  payload: Record<string, unknown>
+): Promise<EdgeInvokeResponse> {
+  if (!supabase) {
+    return {
+      ok: false,
+      code: 'not_configured',
+      error: 'Supabase is not configured.',
+      edgeFunctionUnavailable: true,
+    };
+  }
+
+  const {
+    data: { session },
+    error: sessionErr,
+  } = await supabase.auth.getSession();
+
+  if (sessionErr || !session?.access_token) {
+    return {
+      ok: false,
+      code: 'missing_auth',
+      error: 'Your administrator session is missing or expired. Please sign in again.',
+    };
+  }
+
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-account-provisioning', {
+      body: payload,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    if (error) {
+      const errObj = error as unknown as {
+        name?: string;
+        message?: string;
+        context?: Response;
+      };
+      let parsedBody: Record<string, unknown> | null = null;
+      let statusCode: number | undefined;
+
+      if (errObj.context && typeof errObj.context.json === 'function') {
+        statusCode = errObj.context.status;
+        try {
+          const json = await errObj.context.clone().json();
+          if (json && typeof json === 'object') {
+            parsedBody = json as Record<string, unknown>;
+          }
+        } catch {
+          // Response was not JSON (e.g. gateway 404 when function is not deployed)
+        }
+      }
+
+      if (parsedBody && typeof parsedBody.error === 'string') {
+        return {
+          ok: false,
+          code: typeof parsedBody.code === 'string' ? parsedBody.code : undefined,
+          error: parsedBody.error,
+        };
+      }
+
+      const rawMessage = errObj.message || 'Could not reach account provisioning function.';
+      const isUnavailable =
+        errObj.name === 'FunctionsFetchError' ||
+        errObj.name === 'FunctionsRelayError' ||
+        statusCode === 404 ||
+        /failed to send a request|failed to fetch|not found|404/i.test(rawMessage);
+
+      return {
+        ok: false,
+        code: isUnavailable ? 'edge_function_unavailable' : 'edge_function_error',
+        edgeFunctionUnavailable: isUnavailable,
+        error: isUnavailable
+          ? 'The server-side account provisioning Edge Function ("admin-account-provisioning") is not deployed or unreachable on Supabase yet. Deploy supabase/functions/admin-account-provisioning before provisioning login accounts.'
+          : rawMessage,
+      };
+    }
+
+    if (data && typeof data === 'object' && (data as Record<string, unknown>).ok === false) {
+      const bodyObj = data as Record<string, unknown>;
+      return {
+        ok: false,
+        code: typeof bodyObj.code === 'string' ? bodyObj.code : undefined,
+        error:
+          typeof bodyObj.error === 'string'
+            ? bodyObj.error
+            : 'Account provisioning request was rejected.',
+      };
+    }
+
+    return {
+      ok: true,
+      data: (data && typeof data === 'object' ? data : {}) as Record<string, unknown>,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Network error reaching Edge Function.';
+    return {
+      ok: false,
+      code: 'edge_function_unavailable',
+      edgeFunctionUnavailable: true,
+      error: `Could not reach the server-side account provisioning Edge Function ("admin-account-provisioning"): ${msg}`,
+    };
+  }
+}
+
 export const supabaseSchoolService = {
   isConfigured: () => isSupabaseConfigured,
 
@@ -792,21 +915,71 @@ export const supabaseSchoolService = {
       if (!row || !row.auth_user_id || !row.role) {
         return { profile: null };
       }
-      return {
-        profile: {
-          authUserId: row.auth_user_id,
-          role: row.role,
-          referenceId: row.reference_id ?? undefined,
-          email: row.email ?? '',
-          fullName: row.full_name ?? undefined,
-          isActive: Boolean(row.is_active),
-        },
+      const profile: UserProfile = {
+        authUserId: row.auth_user_id,
+        role: row.role,
+        referenceId: row.reference_id ?? undefined,
+        email: row.email ?? '',
+        fullName: row.full_name ?? undefined,
+        isActive: Boolean(row.is_active),
       };
+
+      // Enrich with server-side must_change_password & account_status if optional migration is applied
+      const securityState = await this.getMyAccountSecurityState();
+      if (securityState) {
+        profile.mustChangePassword = securityState.mustChangePassword;
+        profile.accountStatus = securityState.accountStatus;
+      }
+
+      return { profile };
     } catch (err) {
       return {
         profile: null,
         error: err instanceof Error ? err.message : 'Unable to resolve user profile.',
       };
+    }
+  },
+
+  async getMyAccountSecurityState(): Promise<{
+    accountStatus?: Exclude<AccountProvisioningStatus, 'not_created'>;
+    mustChangePassword: boolean;
+    isActive: boolean;
+  } | null> {
+    if (!supabase) return null;
+    try {
+      const { data, error } = await supabase.rpc('get_my_account_security_state');
+      if (error) {
+        // Optional migration may not be applied yet; caller falls back to Supabase Auth user_metadata
+        return null;
+      }
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return null;
+      const rawStatus = row.out_account_status;
+      const accountStatus: Exclude<AccountProvisioningStatus, 'not_created'> | undefined =
+        rawStatus === 'invitation_pending' || rawStatus === 'active' || rawStatus === 'disabled'
+          ? rawStatus
+          : undefined;
+      return {
+        accountStatus,
+        mustChangePassword: Boolean(row.out_must_change_password),
+        isActive: Boolean(row.out_is_active),
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  async completeMyPasswordSetup(): Promise<{ ok: boolean }> {
+    if (!supabase) return { ok: false };
+    try {
+      const { error } = await supabase.rpc('complete_my_password_setup');
+      if (error) {
+        // Ignore if optional migration RPC is not installed; Auth user_metadata was already cleared
+        return { ok: false };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false };
     }
   },
 
@@ -853,7 +1026,8 @@ export const supabaseSchoolService = {
       studentsRaw,
       passcodeRows,
       teachers,
-      parents,
+      parentsRaw,
+      parentStudentLinks,
       classes,
       subjects,
       scores,
@@ -882,6 +1056,13 @@ export const supabaseSchoolService = {
         : Promise.resolve(undefined as { studentId: string; resultPasscode: string }[] | undefined),
       safeSelect('teachers_safe', fromTeacherRow, { allowEmpty: true }),
       safeSelect('parents', fromParentRow, { allowEmpty: true }),
+      isAdmin || role === 'parent'
+        ? safeSelect<{ parentId: string; studentId: string }>(
+            'parent_students',
+            (r) => ({ parentId: r.parent_id as string, studentId: r.student_id as string }),
+            { allowEmpty: true }
+          )
+        : Promise.resolve(undefined as { parentId: string; studentId: string }[] | undefined),
       safeSelect('classes', fromClassRow, { allowEmpty: true }),
       safeSelect('subjects', fromSubjectRow, { allowEmpty: true }),
       safeSelect('scores', fromScoreRow, { allowEmpty: true }),
@@ -914,6 +1095,23 @@ export const supabaseSchoolService = {
       students = students.map((s) => ({
         ...s,
         resultPasscode: codeMap.get(s.id) ?? s.resultPasscode,
+      }));
+    }
+
+    // Align parent.studentIds with authoritative public.parent_students junction table
+    let parents = parentsRaw;
+    if (parents && parentStudentLinks) {
+      const linksByParent = new Map<string, string[]>();
+      for (const link of parentStudentLinks) {
+        const list = linksByParent.get(link.parentId) ?? [];
+        if (!list.includes(link.studentId)) {
+          list.push(link.studentId);
+        }
+        linksByParent.set(link.parentId, list);
+      }
+      parents = parents.map((p) => ({
+        ...p,
+        studentIds: linksByParent.get(p.id) ?? [],
       }));
     }
 
@@ -1026,21 +1224,383 @@ export const supabaseSchoolService = {
   upsertSystemSettings: (settings: SystemSessionTerm) =>
     safeUpsert('system_settings', toSystemSettingsRow(settings)),
 
-  upsertStudent: (student: Student) =>
-    safeUpsert('students', toStudentRow(student)),
+  // ---------------------------------------------------------------------------
+  // Server-Side Account Provisioning & Authoritative Status (Admin Only)
+  // ---------------------------------------------------------------------------
+  async fetchAccountStatuses(): Promise<{
+    ok: boolean;
+    statuses: Record<string, AccountStatusSummary>;
+    edgeFunctionAvailable: boolean;
+    warning?: string;
+    error?: string;
+  }> {
+    if (!supabase) {
+      return {
+        ok: false,
+        statuses: {},
+        edgeFunctionAvailable: false,
+        error: 'Supabase is not configured.',
+      };
+    }
+
+    // 1. Primary authoritative source: deployed Edge Function inspecting auth.users + user_profiles
+    const edgeRes = await invokeAdminProvisioningFunction({ action: 'list_statuses' });
+    if (edgeRes.ok && Array.isArray(edgeRes.data?.statuses)) {
+      const map: Record<string, AccountStatusSummary> = {};
+      for (const raw of edgeRes.data.statuses as AccountStatusSummary[]) {
+        if (raw && raw.role && raw.recordId) {
+          map[makeAccountStatusKey(raw.role, raw.recordId)] = {
+            ...raw,
+            source: 'edge_function',
+          };
+        }
+      }
+      return {
+        ok: true,
+        statuses: map,
+        edgeFunctionAvailable: true,
+      };
+    }
+
+    // 2. Authoritative database fallback if Edge Function is not deployed yet:
+    //    First try get_admin_account_statuses() RPC (reads auth.users + user_profiles),
+    //    then fall back to admin-readable public.user_profiles.
+    const fallbackMap: Record<string, AccountStatusSummary> = {};
+    try {
+      const { data: rpcRows, error: rpcErr } = await supabase.rpc('get_admin_account_statuses');
+      if (!rpcErr && Array.isArray(rpcRows)) {
+        for (const r of rpcRows as Record<string, any>[]) {
+          const role = r.out_role as PortalAccountRole;
+          const recordId = r.out_reference_id as string | null;
+          if (!recordId || (role !== 'student' && role !== 'teacher' && role !== 'parent')) continue;
+          const statusVal: AccountProvisioningStatus =
+            r.out_account_status === 'disabled'
+              ? 'disabled'
+              : r.out_account_status === 'invitation_pending'
+                ? 'invitation_pending'
+                : 'active';
+          fallbackMap[makeAccountStatusKey(role, recordId)] = {
+            role,
+            recordId,
+            authUserId: r.out_auth_user_id ?? undefined,
+            email: r.out_email ?? undefined,
+            status: statusVal,
+            mustChangePassword: Boolean(r.out_must_change_password),
+            invitedAt: r.out_invited_at ?? undefined,
+            lastSignInAt: r.out_last_sign_in_at ?? undefined,
+            source: 'rpc',
+          };
+        }
+
+        return {
+          ok: true,
+          statuses: fallbackMap,
+          edgeFunctionAvailable: false,
+          warning: edgeRes.error,
+        };
+      }
+
+      const { data: profileRows, error: profileErr } = await supabase
+        .from('user_profiles')
+        .select('auth_user_id, role, reference_id, email, is_active')
+        .in('role', ['student', 'teacher', 'parent']);
+
+      if (!profileErr && Array.isArray(profileRows)) {
+        for (const r of profileRows as Record<string, any>[]) {
+          const role = r.role as PortalAccountRole;
+          const recordId = r.reference_id as string | null;
+          if (!recordId || (role !== 'student' && role !== 'teacher' && role !== 'parent')) continue;
+          fallbackMap[makeAccountStatusKey(role, recordId)] = {
+            role,
+            recordId,
+            authUserId: r.auth_user_id ?? undefined,
+            email: r.email ?? undefined,
+            status: r.is_active ? 'active' : 'disabled',
+            mustChangePassword: false,
+            source: 'profiles_table',
+          };
+        }
+        return {
+          ok: true,
+          statuses: fallbackMap,
+          edgeFunctionAvailable: false,
+          warning: edgeRes.error,
+        };
+      }
+    } catch (err) {
+      console.warn('[Supabase] Fallback account status query failed:', err);
+    }
+
+    return {
+      ok: false,
+      statuses: {},
+      edgeFunctionAvailable: !edgeRes.edgeFunctionUnavailable,
+      error: edgeRes.error || 'Could not retrieve authoritative account statuses from Supabase.',
+    };
+  },
+
+  async provisionPortalAccount(req: ProvisionAccountRequest): Promise<ProvisionAccountResult> {
+    const res = await invokeAdminProvisioningFunction({
+      action: 'provision_account',
+      role: req.role,
+      recordId: req.recordId,
+      email: req.email,
+      mode: req.mode,
+      ...(req.temporaryPassword ? { temporaryPassword: req.temporaryPassword } : {}),
+      ...(req.redirectTo ? { redirectTo: req.redirectTo } : {}),
+    });
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        code: res.code,
+        error: res.error || 'Account provisioning failed.',
+      };
+    }
+
+    const d = res.data ?? {};
+    return {
+      ok: true,
+      status: d.status as AccountProvisioningStatus | undefined,
+      authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
+      email: typeof d.email === 'string' ? d.email : undefined,
+      mode: (d.mode as ProvisionAccountRequest['mode']) ?? req.mode,
+      oneTimeTemporaryPassword:
+        typeof d.oneTimeTemporaryPassword === 'string' ? d.oneTimeTemporaryPassword : undefined,
+      recoveredPartialAccount: Boolean(d.recoveredPartialAccount),
+      message: typeof d.message === 'string' ? d.message : undefined,
+    };
+  },
+
+  async resendPortalAccountInvite(
+    role: PortalAccountRole,
+    recordId: string,
+    redirectTo?: string
+  ): Promise<ProvisionAccountResult> {
+    const res = await invokeAdminProvisioningFunction({
+      action: 'resend_invite',
+      role,
+      recordId,
+      ...(redirectTo ? { redirectTo } : {}),
+    });
+    if (!res.ok) {
+      return { ok: false, code: res.code, error: res.error || 'Could not resend invitation.' };
+    }
+    const d = res.data ?? {};
+    return {
+      ok: true,
+      status: d.status as AccountProvisioningStatus | undefined,
+      authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
+      email: typeof d.email === 'string' ? d.email : undefined,
+      message: typeof d.message === 'string' ? d.message : undefined,
+    };
+  },
+
+  async sendAdminPasswordReset(
+    role: PortalAccountRole,
+    recordId: string,
+    redirectTo?: string
+  ): Promise<ProvisionAccountResult> {
+    const res = await invokeAdminProvisioningFunction({
+      action: 'send_password_reset',
+      role,
+      recordId,
+      ...(redirectTo ? { redirectTo } : {}),
+    });
+    if (!res.ok) {
+      return { ok: false, code: res.code, error: res.error || 'Could not send password reset email.' };
+    }
+    const d = res.data ?? {};
+    return {
+      ok: true,
+      authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
+      email: typeof d.email === 'string' ? d.email : undefined,
+      message: typeof d.message === 'string' ? d.message : undefined,
+    };
+  },
+
+  async setPortalAccountEnabled(
+    role: PortalAccountRole,
+    recordId: string,
+    enabled: boolean
+  ): Promise<ProvisionAccountResult> {
+    const res = await invokeAdminProvisioningFunction({
+      action: 'set_account_status',
+      role,
+      recordId,
+      enabled,
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        code: res.code,
+        error: res.error || 'Could not update account status.',
+      };
+    }
+    const d = res.data ?? {};
+    return {
+      ok: true,
+      status: d.status as AccountProvisioningStatus | undefined,
+      authUserId: typeof d.authUserId === 'string' ? d.authUserId : undefined,
+      email: typeof d.email === 'string' ? d.email : undefined,
+      message: typeof d.message === 'string' ? d.message : undefined,
+    };
+  },
+
+  upsertStudent: async (student: Student): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase
+        .from('students')
+        .upsert(toStudentRow(student), { onConflict: 'id' });
+      if (error) {
+        return { ok: false, error: formatRecordPersistenceError('student', error.message, error.code) };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to save student record.',
+      };
+    }
+  },
 
   upsertStudents: (students: Student[]) =>
     students.length > 0 ? safeUpsert('students', students.map(toStudentRow)) : Promise.resolve({ ok: true }),
 
   deleteStudent: (id: string) => safeDeleteById('students', id),
 
-  upsertTeacher: (teacher: Teacher) =>
-    safeUpsert('teachers', toTeacherRow(teacher)),
+  upsertTeacher: async (teacher: Teacher): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase
+        .from('teachers')
+        .upsert(toTeacherRow(teacher), { onConflict: 'id' });
+      if (error) {
+        return { ok: false, error: formatRecordPersistenceError('teacher', error.message, error.code) };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to save teacher record.',
+      };
+    }
+  },
 
   deleteTeacher: (id: string) => safeDeleteById('teachers', id),
 
-  upsertParent: (parent: Parent) =>
-    safeUpsert('parents', toParentRow(parent)),
+  upsertParent: async (parent: Parent): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase
+        .from('parents')
+        .upsert(toParentRow(parent), { onConflict: 'id' });
+      if (error) {
+        return { ok: false, error: formatRecordPersistenceError('parent', error.message, error.code) };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to save parent record.',
+      };
+    }
+  },
+
+  /**
+   * Explicitly synchronizes `public.parent_students` so that added wards are linked
+   * and removed wards are strictly unlinked (preventing a parent from accessing
+   * another parent's or previously unlinked children).
+   */
+  syncParentStudentLinks: async (
+    parentId: string,
+    parentEmail: string,
+    desiredStudentIds: string[]
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const uniqueDesired = Array.from(new Set(desiredStudentIds.filter(Boolean)));
+      const { data: existingRows, error: fetchErr } = await supabase
+        .from('parent_students')
+        .select('student_id')
+        .eq('parent_id', parentId);
+
+      if (fetchErr) {
+        return { ok: false, error: fetchErr.message };
+      }
+
+      const existingIds = new Set(
+        (existingRows ?? []).map((r: Record<string, any>) => String(r.student_id))
+      );
+      const desiredSet = new Set(uniqueDesired);
+
+      const toDelete = Array.from(existingIds).filter((sid) => !desiredSet.has(sid));
+      const toInsert = uniqueDesired.filter((sid) => !existingIds.has(sid));
+
+      if (toDelete.length > 0) {
+        const { error: delErr } = await supabase
+          .from('parent_students')
+          .delete()
+          .eq('parent_id', parentId)
+          .in('student_id', toDelete);
+        if (delErr) {
+          return { ok: false, error: delErr.message };
+        }
+
+        // Clear matching students.parent_email on explicitly unlinked wards so the
+        // DB trigger trg_parents_sync_parent_students never silently re-links them.
+        const cleanedEmail = parentEmail.trim().toLowerCase();
+        if (cleanedEmail) {
+          await supabase
+            .from('students')
+            .update({ parent_email: null })
+            .in('id', toDelete)
+            .ilike('parent_email', cleanedEmail);
+        }
+      }
+
+      if (toInsert.length > 0) {
+        const { error: insErr } = await supabase.from('parent_students').upsert(
+          toInsert.map((studentId) => ({
+            parent_id: parentId,
+            student_id: studentId,
+            relationship: 'Guardian',
+          })),
+          { onConflict: 'parent_id,student_id' }
+        );
+        if (insErr) {
+          return { ok: false, error: insErr.message };
+        }
+      }
+
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to synchronize parent-student links.',
+      };
+    }
+  },
+
+  deleteParent: async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await supabase.from('parents').delete().eq('id', id);
+      if (error) {
+        return {
+          ok: false,
+          error: formatRecordPersistenceError('parent', error.message, error.code),
+        };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to delete parent record.',
+      };
+    }
+  },
 
   fetchClasses: async (): Promise<{ ok: boolean; data: SchoolClass[]; error?: string }> => {
     if (!supabase) {

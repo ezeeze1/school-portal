@@ -71,6 +71,7 @@ export interface AuthCoordinatorCallbacks {
     profile: UserProfile;
     snapshot: SupabasePortalSnapshot;
     navigateToPortal: boolean;
+    mustChangePassword: boolean;
   }) => void;
   resetToPublic: (options?: { navigateHome?: boolean; clearRecovery?: boolean }) => void;
 }
@@ -673,11 +674,17 @@ export class AuthSessionCoordinator {
         this.activeAuthUserId = authUser.id;
         this.activeRole = profile.role;
 
+        const mustChangePassword = Boolean(
+          profile.mustChangePassword === true ||
+            authUser.user_metadata?.must_change_password === true
+        );
+
         this.callbacks.applyAuthenticatedSession({
           user: resolvedUser,
           profile,
           snapshot,
           navigateToPortal: entry.navigateToPortal,
+          mustChangePassword,
         });
 
         return {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key, School } from 'lucide-react';
+import { Users, UserCheck, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key, School } from 'lucide-react';
 
 export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
   const { currentUser, adminCredentials, students, teachers, parents, classes, applications, subjects, addSubject, systemSettings } = useSchool();
@@ -178,7 +178,18 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
           >
             <Users className="w-6 h-6 text-blue-500 mb-2" />
             <p className="font-bold text-xs text-slate-900 dark:text-white">Staff & Faculty Directory</p>
-            <p className="text-[11px] text-slate-500">Assign subjects, form teachers & roles</p>
+            <p className="text-[11px] text-slate-500">Assign subjects, classes &amp; login access</p>
+          </button>
+
+          <button
+            onClick={() => onNavigate('parents')}
+            className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-1 transition-all border border-slate-200 dark:border-slate-700"
+          >
+            <UserCheck className="w-6 h-6 text-teal-500 mb-2" />
+            <p className="font-bold text-xs text-slate-900 dark:text-white">Parents &amp; Guardians</p>
+            <p className="text-[11px] text-slate-500">
+              Link wards &amp; provision parent logins ({parents.length} registered)
+            </p>
           </button>
 
           <button

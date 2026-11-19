@@ -26,6 +26,10 @@ import {
   FeeRecord,
   SystemSessionTerm,
   AdminCredentials,
+  AccountStatusSummary,
+  PortalAccountRole,
+  ProvisionAccountRequest,
+  ProvisionAccountResult,
 } from '../types';
 
 import {
@@ -63,6 +67,12 @@ import {
   sortSchoolClasses,
   validateClassInput,
 } from '../lib/classManagement';
+import {
+  isPasswordValidationFailure,
+  makeAccountStatusKey,
+  normalizeLoginEmail,
+  validatePortalPassword,
+} from '../lib/accountProvisioning';
 
 interface SchoolContextType {
   // Auth & Session State
@@ -70,6 +80,7 @@ interface SchoolContextType {
   activeRole: UserRole;
   authLoading: boolean;
   authRecoveryMode: boolean;
+  mustChangePassword: boolean;
   dismissAuthRecovery: () => void;
   setCurrentUser: (user: User | null) => void;
   switchRole: (role: UserRole, userObj?: User | null) => void;
@@ -83,6 +94,27 @@ interface SchoolContextType {
     username?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
+
+  // Admin Account Provisioning & Authoritative Status
+  accountStatuses: Record<string, AccountStatusSummary>;
+  accountStatusLoading: boolean;
+  provisioningServiceAvailable: boolean | null;
+  provisioningServiceNotice: string | null;
+  refreshAccountStatuses: () => Promise<{ ok: boolean; error?: string }>;
+  provisionPortalAccount: (request: ProvisionAccountRequest) => Promise<ProvisionAccountResult>;
+  resendAccountInvite: (
+    role: PortalAccountRole,
+    recordId: string
+  ) => Promise<ProvisionAccountResult>;
+  sendAdminPasswordReset: (
+    role: PortalAccountRole,
+    recordId: string
+  ) => Promise<ProvisionAccountResult>;
+  setPortalAccountEnabled: (
+    role: PortalAccountRole,
+    recordId: string,
+    enabled: boolean
+  ) => Promise<ProvisionAccountResult>;
 
   // Active View Navigation
   currentView: string;
@@ -119,21 +151,37 @@ interface SchoolContextType {
   feeRecords: FeeRecord[];
 
   // Student CRUD & Passcodes
-  addStudent: (student: Omit<Student, 'id'>) => Promise<{ ok: boolean; error?: string }>;
-  updateStudent: (id: string, updated: Partial<Student>) => void;
+  addStudent: (
+    student: Omit<Student, 'id'>
+  ) => Promise<{ ok: boolean; data?: Student; error?: string }>;
+  updateStudent: (
+    id: string,
+    updated: Partial<Student>
+  ) => Promise<{ ok: boolean; data?: Student; error?: string }>;
   deleteStudent: (id: string) => void;
   generateResultPasscodeForStudent: (studentId: string) => string;
   bulkGenerateResultPasscodes: () => void;
   verifyResultPasscode: (studentId: string, passcode: string) => Promise<boolean>;
 
   // Teacher CRUD
-  addTeacher: (teacher: Omit<Teacher, 'id'>) => void;
-  updateTeacher: (id: string, updated: Partial<Teacher>) => void;
+  addTeacher: (
+    teacher: Omit<Teacher, 'id'>
+  ) => Promise<{ ok: boolean; data?: Teacher; error?: string }>;
+  updateTeacher: (
+    id: string,
+    updated: Partial<Teacher>
+  ) => Promise<{ ok: boolean; data?: Teacher; error?: string }>;
   deleteTeacher: (id: string) => void;
 
   // Parent CRUD
-  addParent: (parent: Omit<Parent, 'id'>) => void;
-  updateParent: (id: string, updated: Partial<Parent>) => void;
+  addParent: (
+    parent: Omit<Parent, 'id'>
+  ) => Promise<{ ok: boolean; data?: Parent; error?: string }>;
+  updateParent: (
+    id: string,
+    updated: Partial<Parent>
+  ) => Promise<{ ok: boolean; data?: Parent; error?: string }>;
+  deleteParent: (id: string) => Promise<{ ok: boolean; error?: string }>;
 
   // Class & Subject Management
   refreshClasses: () => Promise<{ ok: boolean; data?: SchoolClass[]; error?: string }>;
@@ -258,7 +306,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [activeRole, setActiveRole] = useState<UserRole>('public');
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured);
   const [authRecoveryMode, setAuthRecoveryMode] = useState<boolean>(false);
+  const [mustChangePassword, setMustChangePassword] = useState<boolean>(false);
   const [currentView, setCurrentView] = useState<string>('home');
+
+  const [accountStatuses, setAccountStatuses] = useState<Record<string, AccountStatusSummary>>({});
+  const [accountStatusLoading, setAccountStatusLoading] = useState<boolean>(false);
+  const [provisioningServiceAvailable, setProvisioningServiceAvailable] = useState<boolean | null>(
+    null
+  );
+  const [provisioningServiceNotice, setProvisioningServiceNotice] = useState<string | null>(null);
 
   const [adminCredentials, setAdminCredentials] = useState<AdminCredentials>(initialAdminCredentials);
 
@@ -403,11 +459,39 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (snapshot.announcements) setAnnouncements(snapshot.announcements);
   }, []);
 
+  const loadAccountStatuses = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!isSupabaseConfigured) {
+      setProvisioningServiceAvailable(false);
+      setProvisioningServiceNotice(
+        'Supabase is not configured. Account provisioning requires an active Supabase project and deployed Edge Function.'
+      );
+      return { ok: true };
+    }
+    setAccountStatusLoading(true);
+    try {
+      const res = await supabaseSchoolService.fetchAccountStatuses();
+      setProvisioningServiceAvailable(res.edgeFunctionAvailable);
+      if (res.ok) {
+        setAccountStatuses(res.statuses);
+        setProvisioningServiceNotice(res.edgeFunctionAvailable ? null : res.warning || null);
+        return { ok: true };
+      }
+      setProvisioningServiceNotice(res.error || null);
+      return { ok: false, error: res.error };
+    } finally {
+      setAccountStatusLoading(false);
+    }
+  }, []);
+
   const resetToPublic = useCallback(
     (options?: { navigateHome?: boolean; clearRecovery?: boolean }) => {
       clearPrivateCollections();
       setCurrentUser(null);
       setActiveRole('public');
+      setMustChangePassword(false);
+      setAccountStatuses({});
+      setProvisioningServiceAvailable(null);
+      setProvisioningServiceNotice(null);
       if (options?.navigateHome) {
         setCurrentView('home');
       }
@@ -424,11 +508,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       profile,
       snapshot,
       navigateToPortal,
+      mustChangePassword: requiresPasswordSetup,
     }: {
       user: User;
       profile: UserProfile;
       snapshot: SupabasePortalSnapshot;
       navigateToPortal: boolean;
+      mustChangePassword: boolean;
     }) => {
       if (snapshot.systemSettings) {
         setSystemSettings((prev) => ({
@@ -470,16 +556,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           email: user.email,
           isBootstrapped: true,
         }));
+        void loadAccountStatuses();
+      } else {
+        setAccountStatuses({});
       }
 
       setCurrentUser(user);
       setActiveRole(profile.role);
+      setMustChangePassword(Boolean(requiresPasswordSetup));
 
       if (navigateToPortal) {
         setCurrentView(`${profile.role}-portal`);
       }
     },
-    []
+    [loadAccountStatuses]
   );
 
   const getAuthCoordinator = useCallback((): AuthSessionCoordinator | null => {
@@ -569,15 +659,212 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!isSupabaseConfigured || !supabase) {
       return { ok: false, error: 'Supabase authentication is not configured.' };
     }
-    if (newPassword.length < 8) {
-      return { ok: false, error: 'Password must be at least 8 characters long.' };
+    const validation = validatePortalPassword(newPassword, { minLength: 8 });
+    if (isPasswordValidationFailure(validation)) {
+      return { ok: false, error: validation.error };
     }
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { must_change_password: false },
+    });
     if (error) {
       return { ok: false, error: error.message };
     }
+    await supabaseSchoolService.completeMyPasswordSetup();
     setAuthRecoveryMode(false);
+    setMustChangePassword(false);
     return { ok: true };
+  };
+
+  const refreshAccountStatuses = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return {
+        ok: false,
+        error: 'Only an authenticated administrator can view account provisioning statuses.',
+      };
+    }
+    return loadAccountStatuses();
+  }, [activeRole, currentUser?.role, loadAccountStatuses]);
+
+  const provisionPortalAccount = async (
+    request: ProvisionAccountRequest
+  ): Promise<ProvisionAccountResult> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return {
+        ok: false,
+        code: 'forbidden',
+        error: 'Only an authenticated administrator can provision portal login accounts.',
+      };
+    }
+    if (!isSupabaseConfigured) {
+      return {
+        ok: false,
+        code: 'not_configured',
+        error: 'Supabase is not configured. Connect Supabase and deploy the provisioning Edge Function.',
+      };
+    }
+
+    const res = await supabaseSchoolService.provisionPortalAccount({
+      ...request,
+      email: normalizeLoginEmail(request.email),
+      redirectTo: request.redirectTo || window.location.origin,
+    });
+
+    if (!res.ok) {
+      if (res.code === 'edge_function_unavailable') {
+        setProvisioningServiceAvailable(false);
+        setProvisioningServiceNotice(res.error || null);
+      }
+      return res;
+    }
+
+    setProvisioningServiceAvailable(true);
+    setProvisioningServiceNotice(null);
+
+    const resolvedEmail = res.email || normalizeLoginEmail(request.email);
+    const resolvedAuthId = res.authUserId;
+    const resolvedStatus =
+      res.status || (request.mode === 'invite' ? 'invitation_pending' : 'active');
+
+    if (request.role === 'student') {
+      setStudents((prev) =>
+        prev.map((s) =>
+          s.id === request.recordId
+            ? {
+                ...s,
+                email: resolvedEmail || s.email,
+                authUserId: resolvedAuthId || s.authUserId,
+              }
+            : s
+        )
+      );
+    } else if (request.role === 'teacher') {
+      setTeachers((prev) =>
+        prev.map((t) =>
+          t.id === request.recordId
+            ? {
+                ...t,
+                email: resolvedEmail || t.email,
+                authUserId: resolvedAuthId || t.authUserId,
+              }
+            : t
+        )
+      );
+    } else if (request.role === 'parent') {
+      setParents((prev) =>
+        prev.map((p) =>
+          p.id === request.recordId
+            ? {
+                ...p,
+                email: resolvedEmail || p.email,
+                authUserId: resolvedAuthId || p.authUserId,
+              }
+            : p
+        )
+      );
+    }
+
+    const statusKey = makeAccountStatusKey(request.role, request.recordId);
+    setAccountStatuses((prev) => ({
+      ...prev,
+      [statusKey]: {
+        role: request.role,
+        recordId: request.recordId,
+        authUserId: resolvedAuthId,
+        email: resolvedEmail,
+        status: resolvedStatus,
+        mustChangePassword: true,
+        invitedAt: request.mode === 'invite' ? new Date().toISOString() : prev[statusKey]?.invitedAt,
+        needsRepair: false,
+        source: 'edge_function',
+      },
+    }));
+
+    void loadAccountStatuses();
+    return res;
+  };
+
+  const resendAccountInvite = async (
+    role: PortalAccountRole,
+    recordId: string
+  ): Promise<ProvisionAccountResult> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, code: 'forbidden', error: 'Administrator authentication is required.' };
+    }
+    const res = await supabaseSchoolService.resendPortalAccountInvite(
+      role,
+      recordId,
+      window.location.origin
+    );
+    if (!res.ok) {
+      if (res.code === 'edge_function_unavailable') {
+        setProvisioningServiceAvailable(false);
+        setProvisioningServiceNotice(res.error || null);
+      }
+      return res;
+    }
+    setProvisioningServiceAvailable(true);
+    setProvisioningServiceNotice(null);
+    void loadAccountStatuses();
+    return res;
+  };
+
+  const sendAdminPasswordReset = async (
+    role: PortalAccountRole,
+    recordId: string
+  ): Promise<ProvisionAccountResult> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, code: 'forbidden', error: 'Administrator authentication is required.' };
+    }
+    const res = await supabaseSchoolService.sendAdminPasswordReset(
+      role,
+      recordId,
+      window.location.origin
+    );
+    if (!res.ok) {
+      if (res.code === 'edge_function_unavailable') {
+        setProvisioningServiceAvailable(false);
+        setProvisioningServiceNotice(res.error || null);
+      }
+      return res;
+    }
+    setProvisioningServiceAvailable(true);
+    setProvisioningServiceNotice(null);
+    return res;
+  };
+
+  const setPortalAccountEnabled = async (
+    role: PortalAccountRole,
+    recordId: string,
+    enabled: boolean
+  ): Promise<ProvisionAccountResult> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, code: 'forbidden', error: 'Administrator authentication is required.' };
+    }
+    const res = await supabaseSchoolService.setPortalAccountEnabled(role, recordId, enabled);
+    if (!res.ok) {
+      if (res.code === 'edge_function_unavailable') {
+        setProvisioningServiceAvailable(false);
+        setProvisioningServiceNotice(res.error || null);
+      }
+      return res;
+    }
+    setProvisioningServiceAvailable(true);
+    setProvisioningServiceNotice(null);
+    const statusKey = makeAccountStatusKey(role, recordId);
+    setAccountStatuses((prev) => {
+      const existing = prev[statusKey];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [statusKey]: {
+          ...existing,
+          status: res.status || (enabled ? 'active' : 'disabled'),
+        },
+      };
+    });
+    void loadAccountStatuses();
+    return res;
   };
 
   const updateAdminAuthProfile = async (updates: {
@@ -690,7 +977,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // CRUD Implementations
   const addStudent = async (
     newStudent: Omit<Student, 'id'>
-  ): Promise<{ ok: boolean; error?: string }> => {
+  ): Promise<{ ok: boolean; data?: Student; error?: string }> => {
     if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
       console.warn('[Security] Only administrators can enroll students.');
       return { ok: false, error: 'Only an authenticated administrator can enroll students.' };
@@ -705,8 +992,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const id = `std-${Date.now()}`;
     const { password: _ignoredPassword, resultPasscode, ...safeFields } = newStudent;
+    const normalizedEmail = normalizeLoginEmail(safeFields.email) || undefined;
+    const normalizedParentEmail = normalizeLoginEmail(safeFields.parentEmail) || undefined;
     const created: Student = {
       ...safeFields,
+      email: normalizedEmail,
+      parentEmail: normalizedParentEmail,
       classId: matchedClass.id,
       className: matchedClass.name,
       resultPasscode,
@@ -730,31 +1021,52 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     setStudents((prev) => [...prev, created]);
-    return { ok: true };
+    return { ok: true, data: created };
   };
 
-  const updateStudent = (id: string, updated: Partial<Student>) => {
-    if (activeRole !== 'admin') {
+  const updateStudent = async (
+    id: string,
+    updated: Partial<Student>
+  ): Promise<{ ok: boolean; data?: Student; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
       console.warn('[Security] Only administrators can update student records.');
-      return;
+      return { ok: false, error: 'Only an authenticated administrator can update student records.' };
     }
+    const existing = students.find((s) => s.id === id);
+    if (!existing) {
+      return { ok: false, error: 'The selected student record could not be found.' };
+    }
+
     const { password: _ignoredPassword, resultPasscode, ...safeUpdated } = updated;
-    setStudents((prev) =>
-      prev.map((s) => {
-        if (s.id !== id) return s;
-        const next: Student = {
-          ...s,
-          ...safeUpdated,
-          ...(resultPasscode !== undefined ? { resultPasscode } : {}),
+    const next: Student = {
+      ...existing,
+      ...safeUpdated,
+      email:
+        'email' in safeUpdated
+          ? normalizeLoginEmail(safeUpdated.email) || undefined
+          : existing.email,
+      parentEmail:
+        'parentEmail' in safeUpdated
+          ? normalizeLoginEmail(safeUpdated.parentEmail) || undefined
+          : existing.parentEmail,
+      ...(resultPasscode !== undefined ? { resultPasscode } : {}),
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertStudent(next);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not update student record in Supabase.',
         };
-        void supabaseSchoolService.upsertStudent(next).then((res) => {
-          if (res.ok && resultPasscode && resultPasscode.trim()) {
-            void supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode.trim());
-          }
-        });
-        return next;
-      })
-    );
+      }
+      if (resultPasscode && resultPasscode.trim()) {
+        await supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode.trim());
+      }
+    }
+
+    setStudents((prev) => prev.map((s) => (s.id === id ? next : s)));
+    return { ok: true, data: next };
   };
 
   const generateAlphanumericPasscode = () => {
@@ -818,35 +1130,78 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
     setStudents((prev) => prev.filter((s) => s.id !== id));
+    setAccountStatuses((prev) => {
+      const next = { ...prev };
+      delete next[makeAccountStatusKey('student', id)];
+      return next;
+    });
     void supabaseSchoolService.deleteStudent(id);
   };
 
-  const addTeacher = (newTeacher: Omit<Teacher, 'id'>) => {
-    if (activeRole !== 'admin') {
+  const addTeacher = async (
+    newTeacher: Omit<Teacher, 'id'>
+  ): Promise<{ ok: boolean; data?: Teacher; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
       console.warn('[Security] Only administrators can add teachers.');
-      return;
+      return { ok: false, error: 'Only an authenticated administrator can register staff members.' };
     }
     const id = `tch-${Date.now()}`;
     const { password: _ignoredPassword, ...safeTeacher } = newTeacher;
-    const created: Teacher = { ...safeTeacher, id };
+    const created: Teacher = {
+      ...safeTeacher,
+      email: normalizeLoginEmail(safeTeacher.email),
+      id,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertTeacher(created);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not save staff record to Supabase.',
+        };
+      }
+    }
+
     setTeachers((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertTeacher(created);
+    return { ok: true, data: created };
   };
 
-  const updateTeacher = (id: string, updated: Partial<Teacher>) => {
-    if (activeRole !== 'admin') {
+  const updateTeacher = async (
+    id: string,
+    updated: Partial<Teacher>
+  ): Promise<{ ok: boolean; data?: Teacher; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
       console.warn('[Security] Only administrators can update teachers.');
-      return;
+      return { ok: false, error: 'Only an authenticated administrator can update staff records.' };
     }
+    const existing = teachers.find((t) => t.id === id);
+    if (!existing) {
+      return { ok: false, error: 'The selected staff member record could not be found.' };
+    }
+
     const { password: _ignoredPassword, ...safeUpdated } = updated;
-    setTeachers((prev) =>
-      prev.map((t) => {
-        if (t.id !== id) return t;
-        const next = { ...t, ...safeUpdated };
-        void supabaseSchoolService.upsertTeacher(next);
-        return next;
-      })
-    );
+    const next: Teacher = {
+      ...existing,
+      ...safeUpdated,
+      email:
+        'email' in safeUpdated && safeUpdated.email !== undefined
+          ? normalizeLoginEmail(safeUpdated.email)
+          : existing.email,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertTeacher(next);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not update staff record in Supabase.',
+        };
+      }
+    }
+
+    setTeachers((prev) => prev.map((t) => (t.id === id ? next : t)));
+    return { ok: true, data: next };
   };
 
   const deleteTeacher = (id: string) => {
@@ -855,25 +1210,137 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
     setTeachers((prev) => prev.filter((t) => t.id !== id));
+    setAccountStatuses((prev) => {
+      const next = { ...prev };
+      delete next[makeAccountStatusKey('teacher', id)];
+      return next;
+    });
     void supabaseSchoolService.deleteTeacher(id);
   };
 
-  const addParent = (newParent: Omit<Parent, 'id'>) => {
+  const addParent = async (
+    newParent: Omit<Parent, 'id'>
+  ): Promise<{ ok: boolean; data?: Parent; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      console.warn('[Security] Only administrators can register parents.');
+      return { ok: false, error: 'Only an authenticated administrator can register parents.' };
+    }
+
     const id = `prt-${Date.now()}`;
-    const created = { ...newParent, id };
+    const cleanedStudentIds = Array.from(new Set((newParent.studentIds ?? []).filter(Boolean)));
+    const created: Parent = {
+      ...newParent,
+      email: normalizeLoginEmail(newParent.email),
+      studentIds: cleanedStudentIds,
+      id,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertParent(created);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not save parent record to Supabase.',
+        };
+      }
+      const linkRes = await supabaseSchoolService.syncParentStudentLinks(
+        created.id,
+        created.email,
+        cleanedStudentIds
+      );
+      if (!linkRes.ok) {
+        return {
+          ok: false,
+          error: linkRes.error || 'Parent saved, but linking children in parent_students failed.',
+        };
+      }
+    }
+
     setParents((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertParent(created);
+    return { ok: true, data: created };
   };
 
-  const updateParent = (id: string, updated: Partial<Parent>) => {
-    setParents((prev) =>
-      prev.map((p) => {
-        if (p.id !== id) return p;
-        const next = { ...p, ...updated };
-        void supabaseSchoolService.upsertParent(next);
-        return next;
-      })
+  const updateParent = async (
+    id: string,
+    updated: Partial<Parent>
+  ): Promise<{ ok: boolean; data?: Parent; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      console.warn('[Security] Only administrators can update parent records.');
+      return { ok: false, error: 'Only an authenticated administrator can update parent records.' };
+    }
+    const existing = parents.find((p) => p.id === id);
+    if (!existing) {
+      return { ok: false, error: 'The selected parent record could not be found.' };
+    }
+
+    const cleanedStudentIds = Array.from(
+      new Set((updated.studentIds !== undefined ? updated.studentIds : existing.studentIds).filter(Boolean))
     );
+    const next: Parent = {
+      ...existing,
+      ...updated,
+      email:
+        'email' in updated && updated.email !== undefined
+          ? normalizeLoginEmail(updated.email)
+          : existing.email,
+      studentIds: cleanedStudentIds,
+    };
+
+    const removedStudentIds = existing.studentIds.filter((sid) => !cleanedStudentIds.includes(sid));
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertParent(next);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not update parent record in Supabase.',
+        };
+      }
+      const linkRes = await supabaseSchoolService.syncParentStudentLinks(
+        next.id,
+        next.email,
+        cleanedStudentIds
+      );
+      if (!linkRes.ok) {
+        return {
+          ok: false,
+          error: linkRes.error || 'Parent updated, but synchronizing linked children failed.',
+        };
+      }
+    }
+
+    setParents((prev) => prev.map((p) => (p.id === id ? next : p)));
+    if (removedStudentIds.length > 0 && next.email) {
+      const parentEmailLower = next.email.toLowerCase();
+      setStudents((prev) =>
+        prev.map((s) =>
+          removedStudentIds.includes(s.id) &&
+          s.parentEmail?.trim().toLowerCase() === parentEmailLower
+            ? { ...s, parentEmail: undefined }
+            : s
+        )
+      );
+    }
+    return { ok: true, data: next };
+  };
+
+  const deleteParent = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can delete parent records.' };
+    }
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.deleteParent(id);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Could not delete parent record from Supabase.' };
+      }
+    }
+    setParents((prev) => prev.filter((p) => p.id !== id));
+    setAccountStatuses((prev) => {
+      const next = { ...prev };
+      delete next[makeAccountStatusKey('parent', id)];
+      return next;
+    });
+    return { ok: true };
   };
 
   const refreshClasses = useCallback(async (): Promise<{
@@ -1479,6 +1946,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         activeRole,
         authLoading,
         authRecoveryMode,
+        mustChangePassword,
         dismissAuthRecovery,
         setCurrentUser,
         switchRole,
@@ -1487,6 +1955,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updatePassword,
         updateAdminAuthProfile,
         logout,
+        accountStatuses,
+        accountStatusLoading,
+        provisioningServiceAvailable,
+        provisioningServiceNotice,
+        refreshAccountStatuses,
+        provisionPortalAccount,
+        resendAccountInvite,
+        sendAdminPasswordReset,
+        setPortalAccountEnabled,
         currentView,
         setCurrentView,
         systemSettings,
@@ -1527,6 +2004,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteTeacher,
         addParent,
         updateParent,
+        deleteParent,
         refreshClasses,
         addClass,
         updateClass,

@@ -3,6 +3,7 @@ import { AdminDashboard } from './AdminDashboard';
 import { ClassManager } from './ClassManager';
 import { StudentManager } from './StudentManager';
 import { TeacherManager } from './TeacherManager';
+import { ParentManager } from './ParentManager';
 import { ApplicationsManager } from './ApplicationsManager';
 import { AcademicSessionManager } from './AcademicSessionManager';
 import { SubjectManager } from './SubjectManager';
@@ -11,6 +12,7 @@ import {
   School,
   GraduationCap,
   Users,
+  UserCheck,
   FileText,
   Settings,
   ShieldCheck,
@@ -25,6 +27,7 @@ export const AdminPortalLayout: React.FC = () => {
     { id: 'classes', label: 'Class Management', icon: School },
     { id: 'students', label: 'Student SIS Manager', icon: GraduationCap },
     { id: 'teachers', label: 'Staff & Faculty', icon: Users },
+    { id: 'parents', label: 'Parents & Guardians', icon: UserCheck },
     { id: 'subjects', label: 'Curriculum & Subjects', icon: BookOpen },
     { id: 'applications', label: 'Online Applications Desk', icon: FileText },
     { id: 'sessions', label: 'Sessions & Settings', icon: Settings },
@@ -78,6 +81,7 @@ export const AdminPortalLayout: React.FC = () => {
             <StudentManager onNavigateToClasses={() => setActiveTab('classes')} />
           )}
           {activeTab === 'teachers' && <TeacherManager />}
+          {activeTab === 'parents' && <ParentManager />}
           {activeTab === 'subjects' && <SubjectManager />}
           {activeTab === 'applications' && <ApplicationsManager />}
           {activeTab === 'sessions' && <AcademicSessionManager />}

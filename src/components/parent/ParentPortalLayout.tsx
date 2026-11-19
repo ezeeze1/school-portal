@@ -11,11 +11,11 @@ export const ParentPortalLayout: React.FC = () => {
   const currentParent = currentUser
     ? parents.find(
         (p) =>
+          (currentUser.authUserId && p.authUserId === currentUser.authUserId) ||
           p.id === currentUser.id ||
           (currentUser.referenceId &&
             p.parentId?.toLowerCase() === currentUser.referenceId.toLowerCase()) ||
-          (currentUser.email && p.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-          (currentUser.name && p.fullName.toLowerCase() === currentUser.name.toLowerCase())
+          (currentUser.email && p.email.toLowerCase() === currentUser.email.toLowerCase())
       )
     : undefined;
 
@@ -25,14 +25,16 @@ export const ParentPortalLayout: React.FC = () => {
       : currentParent.fullName
     : currentUser?.name || 'Parent / Guardian';
 
-  // Wards / Children strictly linked to this parent only (NEVER fall back to all school students)
+  // Wards / Children strictly linked via authoritative parent_students / studentIds (NEVER another parent's children)
+  const linkedStudentIds = new Set(currentParent?.studentIds ?? []);
   const parentEmailToMatch = (currentParent?.email || currentUser?.email || '').toLowerCase();
   const availableStudents = currentUser
-    ? students.filter(
-        (s) =>
-          (parentEmailToMatch && s.parentEmail?.toLowerCase() === parentEmailToMatch) ||
-          Boolean(currentParent?.studentIds?.includes(s.id))
-      )
+    ? students.filter((s) => {
+        if (linkedStudentIds.size > 0) {
+          return linkedStudentIds.has(s.id);
+        }
+        return Boolean(parentEmailToMatch && s.parentEmail?.toLowerCase() === parentEmailToMatch);
+      })
     : [];
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
