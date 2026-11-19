@@ -853,6 +853,14 @@ async function invokeAdminProvisioningFunction(
         };
       }
 
+      if (parsedBody && typeof parsedBody.message === 'string' && statusCode !== 404) {
+        return {
+          ok: false,
+          code: typeof parsedBody.code === 'string' ? parsedBody.code : 'gateway_error',
+          error: parsedBody.message,
+        };
+      }
+
       const rawMessage = errObj.message || 'Could not reach account provisioning function.';
       const isUnavailable =
         errObj.name === 'FunctionsFetchError' ||

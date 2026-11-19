@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { buildCorsHeaders } from '../_shared/cors.ts';
 import {
   handleStudentLoginRequest,
@@ -141,9 +141,28 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  const readFirstDictKey = (rawJson: string | undefined): string => {
+    if (!rawJson) return '';
+    try {
+      const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+      const match = Object.values(parsed).find(
+        (val): val is string => typeof val === 'string' && val.trim().length > 0
+      );
+      return match ? match.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+  const serviceRoleKey =
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
+    Deno.env.get('SB_SECRET_KEY') ??
+    readFirstDictKey(Deno.env.get('SUPABASE_SECRET_KEYS'));
+  const anonKey =
+    Deno.env.get('SUPABASE_ANON_KEY') ??
+    Deno.env.get('SB_PUBLISHABLE_KEY') ??
+    readFirstDictKey(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS'));
 
   if (!supabaseUrl || !serviceRoleKey || !anonKey) {
     return new Response(

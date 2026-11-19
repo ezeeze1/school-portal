@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { buildCorsHeaders } from '../_shared/cors.ts';
 import {
   handleProvisioningRequest,
@@ -199,7 +199,11 @@ function createSupabaseBackendAdapter(adminClient: SupabaseClient): Provisioning
 
       if (!error) return { ok: true };
 
-      if (/column .* does not exist|schema cache/i.test(error.message)) {
+      if (
+        error.code === 'PGRST204' ||
+        error.code === '42703' ||
+        /column .* does not exist|schema cache/i.test(error.message)
+      ) {
         const basePayload = {
           auth_user_id: input.authUserId,
           role: input.role,
@@ -292,7 +296,22 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  let serviceRoleKey =
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SB_SECRET_KEY') ?? '';
+  if (!serviceRoleKey) {
+    const secretKeysJson = Deno.env.get('SUPABASE_SECRET_KEYS');
+    if (secretKeysJson) {
+      try {
+        const parsedKeys = JSON.parse(secretKeysJson) as Record<string, unknown>;
+        const firstSecret = Object.values(parsedKeys).find(
+          (val): val is string => typeof val === 'string' && val.trim().length > 0
+        );
+        if (firstSecret) serviceRoleKey = firstSecret.trim();
+      } catch {
+        // Ignore malformed optional dictionary
+      }
+    }
+  }
 
   if (!supabaseUrl || !serviceRoleKey) {
     return new Response(

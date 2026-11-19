@@ -19,28 +19,56 @@ Review and run the single non-destructive, idempotent SQL migration file in **Su
 
 ## 2. Deploy Both Supabase Edge Functions
 
-Deploy both Edge Functions using the Supabase CLI:
+Two server-side Edge Functions power account creation and student Admission Number login:
+
+1. **`admin-account-provisioning`** (`supabase/functions/admin-account-provisioning`) — Administrator-only creation of student, teacher, and parent login accounts, password assignment, account status checks, and disable/reactivate controls.
+2. **`student-auth-login`** (`supabase/functions/student-auth-login`) — Required companion function for **Student Admission Number + Password** sign-in (with server-side rate limiting and anti-enumeration responses).
+
+### Option A: Deploy via Supabase CLI (Recommended)
+
+Because both functions import shared TypeScript modules from `supabase/functions/_shared/` (`cors.ts`, `provisioningCore.ts`, `studentLoginCore.ts`), the Supabase CLI bundles everything automatically in two commands:
 
 ```bash
-# 1. Authenticate and link your Supabase project
-supabase login
-supabase link --project-ref <YOUR_PROJECT_REF>
+# 1. Authenticate and link your Supabase project (run from the project root)
+npx supabase login
+npx supabase link --project-ref <YOUR_PROJECT_REF>
 
-# 2. Deploy the admin-only account provisioning function (JWT verification ENABLED)
-supabase functions deploy admin-account-provisioning
+# 2. Deploy the admin-only account provisioning function
+npx supabase functions deploy admin-account-provisioning
 
-# 3. Deploy the student Admission Number sign-in function (JWT verification DISABLED because students call it before signing in)
-supabase functions deploy student-auth-login --no-verify-jwt
+# 3. Deploy the student Admission Number sign-in function
+#    (--no-verify-jwt is REQUIRED because unauthenticated students call this endpoint to log in)
+npx supabase functions deploy student-auth-login --no-verify-jwt
 ```
 
-### Edge Function Secrets & Security
-- Supabase automatically injects `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into deployed Edge Functions.
-- **Never** add `SUPABASE_SERVICE_ROLE_KEY` to `.env`, `.env.local`, Vite, or Vercel frontend environment variables.
-- Recommended production origin lockdown secrets:
+> **Note on newer Supabase projects using ECC (ES256) JWT signing keys:** `admin-account-provisioning` independently verifies every caller's Supabase JWT on the server via `adminClient.auth.getUser(jwt)` AND verifies `role = 'admin' AND is_active = true` in `public.user_profiles`. If your project's legacy Edge Gateway returns `401 Invalid JWT` before the function runs, deploy `admin-account-provisioning` with `--no-verify-jwt` (or toggle off legacy gateway JWT verification in the Dashboard) — full server-side JWT and administrator-role verification remains strictly enforced inside the function.
+
+### Option B: Deploy via Supabase Dashboard (Web Editor)
+
+Because the Dashboard web editor uploads files per function folder rather than automatically resolving `../_shared/`:
+
+1. Open **Supabase Dashboard -> Edge Functions -> Deploy a new function -> Via Editor**.
+2. Create function **`admin-account-provisioning`**:
+   - Add files `index.ts` (from `supabase/functions/admin-account-provisioning/index.ts`), `cors.ts` (from `supabase/functions/_shared/cors.ts`), and `provisioningCore.ts` (from `supabase/functions/_shared/provisioningCore.ts`) in the function's editor folder.
+   - In the Dashboard copy of `index.ts`, change `../_shared/cors.ts` to `./cors.ts` and `../_shared/provisioningCore.ts` to `./provisioningCore.ts`.
+   - Click **Deploy function**.
+3. Create function **`student-auth-login`**:
+   - Add files `index.ts` (from `supabase/functions/student-auth-login/index.ts`), `cors.ts` (from `supabase/functions/_shared/cors.ts`), and `studentLoginCore.ts` (from `supabase/functions/_shared/studentLoginCore.ts`) in the function's editor folder.
+   - In the Dashboard copy of `index.ts`, change `../_shared/cors.ts` to `./cors.ts` and `../_shared/studentLoginCore.ts` to `./studentLoginCore.ts`.
+   - Under function **Details / Settings**, disable **Enforce JWT Verification / Verify JWT with legacy secret** (required so students can call it before signing in).
+   - Click **Deploy function**.
+
+### Edge Function Secrets & Environment Configuration
+- **Auto-injected by Supabase (no manual setup required)**: `SUPABASE_URL`, `SUPABASE_ANON_KEY` (or `SUPABASE_PUBLISHABLE_KEYS`), and `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEYS`) are injected automatically into deployed Edge Functions.
+- **Never** add `SUPABASE_SERVICE_ROLE_KEY` or any secret key to `.env`, `.env.local`, Vite, or Vercel frontend environment variables.
+- **Optional recommended production secrets** (configure under **Supabase Dashboard -> Edge Functions -> Secrets** or via CLI):
 
 ```bash
-supabase secrets set ALLOWED_ORIGIN="https://your-school-portal-domain.com"
-supabase secrets set ALLOWED_REDIRECT_ORIGINS="https://your-school-portal-domain.com"
+# Comma-separated browser origins allowed to call the Edge Functions (include local dev / preview URLs if testing)
+npx supabase secrets set ALLOWED_ORIGIN="https://your-school-portal-domain.com"
+
+# Comma-separated redirect origins allowed for Teacher/Parent setup invitation links
+npx supabase secrets set ALLOWED_REDIRECT_ORIGINS="https://your-school-portal-domain.com"
 ```
 
 ---
