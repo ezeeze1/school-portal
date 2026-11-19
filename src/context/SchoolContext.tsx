@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   User,
+  UserProfile,
   UserRole,
   Student,
   Teacher,
@@ -49,7 +50,19 @@ import {
   sampleFeeRecords,
 } from '../data/initialData';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { supabaseSchoolService } from '../services/supabaseSchoolService';
+import {
+  supabaseSchoolService,
+  SupabasePortalSnapshot,
+} from '../services/supabaseSchoolService';
+import { AuthSessionCoordinator } from '../lib/authSessionCoordinator';
+import {
+  countClassDependencies,
+  formatClassDependencyError,
+  generateClassId,
+  isClassValidationFailure,
+  sortSchoolClasses,
+  validateClassInput,
+} from '../lib/classManagement';
 
 interface SchoolContextType {
   // Auth & Session State
@@ -106,7 +119,7 @@ interface SchoolContextType {
   feeRecords: FeeRecord[];
 
   // Student CRUD & Passcodes
-  addStudent: (student: Omit<Student, 'id'>) => void;
+  addStudent: (student: Omit<Student, 'id'>) => Promise<{ ok: boolean; error?: string }>;
   updateStudent: (id: string, updated: Partial<Student>) => void;
   deleteStudent: (id: string) => void;
   generateResultPasscodeForStudent: (studentId: string) => string;
@@ -123,7 +136,13 @@ interface SchoolContextType {
   updateParent: (id: string, updated: Partial<Parent>) => void;
 
   // Class & Subject Management
-  addClass: (cls: Omit<SchoolClass, 'id'>) => void;
+  refreshClasses: () => Promise<{ ok: boolean; data?: SchoolClass[]; error?: string }>;
+  addClass: (cls: Omit<SchoolClass, 'id'>) => Promise<{ ok: boolean; data?: SchoolClass; error?: string }>;
+  updateClass: (
+    id: string,
+    updated: Partial<Omit<SchoolClass, 'id'>>
+  ) => Promise<{ ok: boolean; data?: SchoolClass; error?: string }>;
+  deleteClass: (id: string) => Promise<{ ok: boolean; error?: string }>;
   addSubject: (subj: Omit<Subject, 'id'>) => void;
 
   // Score & Result Entry
@@ -343,7 +362,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   });
 
-  const authSequenceRef = useRef(0);
+  const authCoordinatorRef = useRef<AuthSessionCoordinator | null>(null);
 
   const clearPrivateCollections = useCallback(() => {
     if (!isSupabaseConfigured) return;
@@ -384,36 +403,33 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (snapshot.announcements) setAnnouncements(snapshot.announcements);
   }, []);
 
-  const hydrateAuthenticatedSession = useCallback(
-    async (
-      authUser: { id: string; email?: string; user_metadata?: Record<string, any> },
-      options?: { navigateToPortal?: boolean }
-    ): Promise<{ ok: boolean; error?: string }> => {
-      const seq = ++authSequenceRef.current;
-
-      const { profile, error } = await supabaseSchoolService.syncMyUserProfile();
-      if (seq !== authSequenceRef.current) {
-        return { ok: false, error: 'Session superseded.' };
+  const resetToPublic = useCallback(
+    (options?: { navigateHome?: boolean; clearRecovery?: boolean }) => {
+      clearPrivateCollections();
+      setCurrentUser(null);
+      setActiveRole('public');
+      if (options?.navigateHome) {
+        setCurrentView('home');
       }
-
-      if (!profile || !profile.isActive) {
-        clearPrivateCollections();
-        setCurrentUser(null);
-        setActiveRole('public');
-        await applyPublicSnapshot();
-        return {
-          ok: false,
-          error:
-            error ||
-            'Your Supabase login succeeded, but no active school portal profile is linked to this account yet. Please contact the school administrator.',
-        };
+      if (options?.clearRecovery) {
+        setAuthRecoveryMode(false);
       }
+    },
+    [clearPrivateCollections]
+  );
 
-      const snapshot = await supabaseSchoolService.fetchPortalSnapshot(profile.role);
-      if (seq !== authSequenceRef.current) {
-        return { ok: false, error: 'Session superseded.' };
-      }
-
+  const applyAuthenticatedSession = useCallback(
+    ({
+      user,
+      profile,
+      snapshot,
+      navigateToPortal,
+    }: {
+      user: User;
+      profile: UserProfile;
+      snapshot: SupabasePortalSnapshot;
+      navigateToPortal: boolean;
+    }) => {
       if (snapshot.systemSettings) {
         setSystemSettings((prev) => ({
           ...prev,
@@ -426,14 +442,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }));
       }
 
-      const loadedStudents = snapshot.students ?? [];
-      const loadedTeachers = snapshot.teachers ?? [];
-      const loadedParents = snapshot.parents ?? [];
-
-      setStudents(loadedStudents);
-      setTeachers(loadedTeachers);
-      setParents(loadedParents);
-      setClasses(snapshot.classes ?? []);
+      setStudents(snapshot.students ?? []);
+      setTeachers(snapshot.teachers ?? []);
+      setParents(snapshot.parents ?? []);
+      setClasses(sortSchoolClasses(snapshot.classes ?? []));
       setSubjects(snapshot.subjects ?? []);
       setScores(snapshot.scores ?? []);
       setResults(snapshot.results ?? []);
@@ -451,173 +463,55 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (snapshot.downloads) setDownloads(snapshot.downloads);
       if (snapshot.announcements) setAnnouncements(snapshot.announcements);
 
-      let resolvedUser: User;
-      const email = profile.email || authUser.email || '';
-
-      if (profile.role === 'teacher') {
-        const matched = loadedTeachers.find(
-          (t) =>
-            t.authUserId === authUser.id ||
-            (profile.referenceId && t.id === profile.referenceId) ||
-            t.email.toLowerCase() === email.toLowerCase()
-        );
-        resolvedUser = {
-          id: matched?.id || profile.referenceId || authUser.id,
-          authUserId: authUser.id,
-          name: matched
-            ? `${matched.firstName} ${matched.lastName}`
-            : profile.fullName || authUser.user_metadata?.full_name || 'Faculty Member',
-          email,
-          role: 'teacher',
-          avatar: matched?.avatar,
-          referenceId: matched?.staffId || profile.referenceId,
-        };
-      } else if (profile.role === 'student') {
-        const matched = loadedStudents.find(
-          (s) =>
-            s.authUserId === authUser.id ||
-            (profile.referenceId && s.id === profile.referenceId) ||
-            (s.email && s.email.toLowerCase() === email.toLowerCase())
-        );
-        resolvedUser = {
-          id: matched?.id || profile.referenceId || authUser.id,
-          authUserId: authUser.id,
-          name: matched
-            ? `${matched.firstName} ${matched.lastName}`
-            : profile.fullName || authUser.user_metadata?.full_name || 'Student',
-          email,
-          role: 'student',
-          avatar: matched?.avatar,
-          referenceId: matched?.admissionNo || profile.referenceId,
-        };
-      } else if (profile.role === 'parent') {
-        const matched = loadedParents.find(
-          (p) =>
-            p.authUserId === authUser.id ||
-            (profile.referenceId && p.id === profile.referenceId) ||
-            p.email.toLowerCase() === email.toLowerCase()
-        );
-        resolvedUser = {
-          id: matched?.id || profile.referenceId || authUser.id,
-          authUserId: authUser.id,
-          name: matched
-            ? matched.title
-              ? `${matched.title} ${matched.fullName}`
-              : matched.fullName
-            : profile.fullName || authUser.user_metadata?.full_name || 'Parent / Guardian',
-          email,
-          role: 'parent',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-          referenceId: matched?.parentId || profile.referenceId,
-        };
-      } else {
-        const adminDisplayName =
-          profile.fullName ||
-          (typeof authUser.user_metadata?.full_name === 'string'
-            ? authUser.user_metadata.full_name
-            : '') ||
-          'System Administrator';
-        resolvedUser = {
-          id: profile.referenceId || 'usr-admin',
-          authUserId: authUser.id,
-          name: adminDisplayName,
-          email,
-          role: 'admin',
-          avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200',
-          referenceId: profile.referenceId || 'ADM-001',
-        };
+      if (profile.role === 'admin' && user.role === 'admin') {
         setAdminCredentials((prev) => ({
           ...prev,
-          name: adminDisplayName,
-          email,
+          name: user.name,
+          email: user.email,
           isBootstrapped: true,
         }));
       }
 
-      setCurrentUser(resolvedUser);
+      setCurrentUser(user);
       setActiveRole(profile.role);
 
-      if (options?.navigateToPortal) {
+      if (navigateToPortal) {
         setCurrentView(`${profile.role}-portal`);
       }
-
-      return { ok: true };
     },
-    [applyPublicSnapshot, clearPrivateCollections]
+    []
   );
 
-  // Purge legacy localStorage credential/session keys & initialize Supabase Auth listener
+  const getAuthCoordinator = useCallback((): AuthSessionCoordinator | null => {
+    if (!isSupabaseConfigured || !supabase) return null;
+    if (!authCoordinatorRef.current) {
+      authCoordinatorRef.current = new AuthSessionCoordinator(
+        supabase.auth,
+        supabaseSchoolService,
+        {
+          setAuthLoading,
+          setAuthRecoveryMode,
+          applyPublicSnapshot,
+          applyAuthenticatedSession,
+          resetToPublic,
+        }
+      );
+    }
+    return authCoordinatorRef.current;
+  }, [applyAuthenticatedSession, applyPublicSnapshot, resetToPublic]);
+
+  // Purge legacy localStorage credential/session keys & initialize single Supabase Auth listener
   useEffect(() => {
     purgeSensitiveLocalStorage();
 
-    if (!isSupabaseConfigured || !supabase) {
+    const coordinator = getAuthCoordinator();
+    if (!coordinator) {
       setAuthLoading(false);
       return;
     }
 
-    let isMounted = true;
-
-    const bootstrapSession = async () => {
-      setAuthLoading(true);
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!isMounted) return;
-
-        if (session?.user) {
-          const res = await hydrateAuthenticatedSession(session.user, { navigateToPortal: false });
-          if (!res.ok && isMounted) {
-            await supabase.auth.signOut();
-          }
-        } else {
-          clearPrivateCollections();
-          setCurrentUser(null);
-          setActiveRole('public');
-          await applyPublicSnapshot();
-        }
-      } finally {
-        if (isMounted) setAuthLoading(false);
-      }
-    };
-
-    void bootstrapSession();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!isMounted) return;
-
-      if (event === 'PASSWORD_RECOVERY') {
-        setAuthRecoveryMode(true);
-      }
-
-      if (event === 'SIGNED_OUT' || !session?.user) {
-        authSequenceRef.current += 1;
-        clearPrivateCollections();
-        setCurrentUser(null);
-        setActiveRole('public');
-        setCurrentView('home');
-        void applyPublicSnapshot();
-        return;
-      }
-
-      if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-        setTimeout(() => {
-          if (!isMounted) return;
-          void hydrateAuthenticatedSession(session.user, {
-            navigateToPortal: event === 'SIGNED_IN',
-          });
-        }, 0);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-    };
-  }, [applyPublicSnapshot, clearPrivateCollections, hydrateAuthenticatedSession]);
+    return coordinator.attach();
+  }, [getAuthCoordinator]);
 
   // Only persist public site content/settings to localStorage (never PII, credentials, or roles)
   useEffect(() => {
@@ -638,7 +532,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     email: string,
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
-    if (!isSupabaseConfigured || !supabase) {
+    const coordinator = getAuthCoordinator();
+    if (!coordinator) {
       return {
         ok: false,
         error:
@@ -646,35 +541,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     }
 
-    const cleanedEmail = email.trim().toLowerCase();
-    if (!cleanedEmail || !password) {
-      return { ok: false, error: 'Please enter both your email address and password.' };
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: cleanedEmail,
-      password,
-    });
-
-    if (error || !data.user) {
-      return {
-        ok: false,
-        error: error?.message || 'Invalid email or password.',
-      };
-    }
-
-    const hydrationResult = await hydrateAuthenticatedSession(data.user, {
-      navigateToPortal: true,
-    });
-    if (!hydrationResult.ok) {
-      await supabase.auth.signOut();
-      return {
-        ok: false,
-        error: hydrationResult.error || 'Account is not linked to an active school portal role.',
-      };
-    }
-
-    return { ok: true };
+    return coordinator.signInWithPassword(email, password);
   };
 
   const sendPasswordResetEmail = async (
@@ -772,18 +639,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const logout = async () => {
-    authSequenceRef.current += 1;
-    if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut();
+    const coordinator = getAuthCoordinator();
+    if (coordinator) {
+      await coordinator.logout();
+      return;
     }
-    clearPrivateCollections();
-    setCurrentUser(null);
-    setActiveRole('public');
-    setCurrentView('home');
-    setAuthRecoveryMode(false);
-    if (isSupabaseConfigured) {
-      await applyPublicSnapshot();
-    }
+    resetToPublic({ navigateHome: true, clearRecovery: true });
   };
 
   // Never allow client-side role elevation when Supabase is configured
@@ -827,20 +688,49 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   // CRUD Implementations
-  const addStudent = (newStudent: Omit<Student, 'id'>) => {
-    if (activeRole !== 'admin') {
+  const addStudent = async (
+    newStudent: Omit<Student, 'id'>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
       console.warn('[Security] Only administrators can enroll students.');
-      return;
+      return { ok: false, error: 'Only an authenticated administrator can enroll students.' };
     }
+    const matchedClass = classes.find((c) => c.id === newStudent.classId);
+    if (!matchedClass) {
+      return {
+        ok: false,
+        error: 'Please select a valid class from Class Management before enrolling a student.',
+      };
+    }
+
     const id = `std-${Date.now()}`;
     const { password: _ignoredPassword, resultPasscode, ...safeFields } = newStudent;
-    const created: Student = { ...safeFields, resultPasscode, id };
-    setStudents((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertStudent(created).then((res) => {
-      if (res.ok && resultPasscode) {
-        void supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode);
+    const created: Student = {
+      ...safeFields,
+      classId: matchedClass.id,
+      className: matchedClass.name,
+      resultPasscode,
+      id,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertStudent(created);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not save student record to Supabase.',
+        };
       }
-    });
+      if (resultPasscode) {
+        const codeRes = await supabaseSchoolService.upsertStudentResultPasscode(id, resultPasscode);
+        if (!codeRes.ok) {
+          console.warn('[Supabase] Student enrolled, but passcode upsert failed:', codeRes.error);
+        }
+      }
+    }
+
+    setStudents((prev) => [...prev, created]);
+    return { ok: true };
   };
 
   const updateStudent = (id: string, updated: Partial<Student>) => {
@@ -986,11 +876,168 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
   };
 
-  const addClass = (cls: Omit<SchoolClass, 'id'>) => {
-    const id = `cls-${Date.now()}`;
-    const created = { ...cls, id };
-    setClasses((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertClass(created);
+  const refreshClasses = useCallback(async (): Promise<{
+    ok: boolean;
+    data?: SchoolClass[];
+    error?: string;
+  }> => {
+    if (!isSupabaseConfigured) {
+      return { ok: true, data: classes };
+    }
+    const res = await supabaseSchoolService.fetchClasses();
+    if (!res.ok) {
+      return { ok: false, error: res.error || 'Could not load classes from Supabase.' };
+    }
+    setClasses(res.data);
+    return { ok: true, data: res.data };
+  }, [classes]);
+
+  const addClass = async (
+    cls: Omit<SchoolClass, 'id'>
+  ): Promise<{ ok: boolean; data?: SchoolClass; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can create classes.' };
+    }
+
+    const validation = validateClassInput(cls, classes, {
+      validTeacherIds: new Set(teachers.map((t) => t.id)),
+    });
+    if (isClassValidationFailure(validation)) {
+      return { ok: false, error: validation.error };
+    }
+
+    const id = generateClassId(
+      validation.sanitized.name,
+      classes.map((c) => c.id)
+    );
+    const created: SchoolClass = {
+      ...validation.sanitized,
+      id,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.createClass(created);
+      if (!res.ok || !res.data) {
+        return {
+          ok: false,
+          error: res.error || 'Could not create class in Supabase.',
+        };
+      }
+      const saved = res.data;
+      setClasses((prev) => sortSchoolClasses([...prev.filter((c) => c.id !== saved.id), saved]));
+      return { ok: true, data: saved };
+    }
+
+    setClasses((prev) => sortSchoolClasses([...prev, created]));
+    return { ok: true, data: created };
+  };
+
+  const updateClass = async (
+    id: string,
+    updated: Partial<Omit<SchoolClass, 'id'>>
+  ): Promise<{ ok: boolean; data?: SchoolClass; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can edit classes.' };
+    }
+
+    const existing = classes.find((c) => c.id === id);
+    if (!existing) {
+      return { ok: false, error: 'The selected class no longer exists.' };
+    }
+
+    const merged = {
+      name: updated.name !== undefined ? updated.name : existing.name,
+      category: updated.category !== undefined ? updated.category : existing.category,
+      arms: updated.arms !== undefined ? updated.arms : existing.arms,
+      classTeacherId:
+        updated.classTeacherId !== undefined ? updated.classTeacherId : existing.classTeacherId,
+      capacity: updated.capacity !== undefined ? updated.capacity : existing.capacity,
+    };
+
+    const validation = validateClassInput(merged, classes, {
+      excludeId: id,
+      validTeacherIds: new Set(teachers.map((t) => t.id)),
+    });
+    if (isClassValidationFailure(validation)) {
+      return { ok: false, error: validation.error };
+    }
+
+    const nextClass: SchoolClass = {
+      ...validation.sanitized,
+      id,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.updateClass(nextClass, {
+        previousName: existing.name,
+      });
+      if (!res.ok || !res.data) {
+        return {
+          ok: false,
+          error: res.error || 'Could not update class in Supabase.',
+        };
+      }
+      const saved = res.data;
+      setClasses((prev) =>
+        sortSchoolClasses(prev.map((c) => (c.id === id ? saved : c)))
+      );
+      if (saved.name !== existing.name) {
+        setStudents((prev) =>
+          prev.map((s) => (s.classId === id ? { ...s, className: saved.name } : s))
+        );
+      }
+      return { ok: true, data: saved };
+    }
+
+    setClasses((prev) => sortSchoolClasses(prev.map((c) => (c.id === id ? nextClass : c))));
+    if (nextClass.name !== existing.name) {
+      setStudents((prev) =>
+        prev.map((s) => (s.classId === id ? { ...s, className: nextClass.name } : s))
+      );
+    }
+    return { ok: true, data: nextClass };
+  };
+
+  const deleteClass = async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can delete classes.' };
+    }
+
+    const existing = classes.find((c) => c.id === id);
+    if (!existing) {
+      return { ok: false, error: 'The selected class could not be found.' };
+    }
+
+    const localDeps = countClassDependencies(id, {
+      students,
+      scores,
+      results,
+      attendance,
+      cbtExams,
+      assignments,
+      studyNotes,
+      teachers,
+    });
+
+    if (localDeps.totalLinked > 0) {
+      return {
+        ok: false,
+        error: formatClassDependencyError(existing.name, localDeps),
+      };
+    }
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.deleteClass(id, existing.name);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.error || 'Could not delete class from Supabase.',
+        };
+      }
+    }
+
+    setClasses((prev) => prev.filter((c) => c.id !== id));
+    return { ok: true };
   };
 
   const addSubject = (subj: Omit<Subject, 'id'>) => {
@@ -1480,7 +1527,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteTeacher,
         addParent,
         updateParent,
+        refreshClasses,
         addClass,
+        updateClass,
+        deleteClass,
         addSubject,
         saveScore,
         saveBatchScores,

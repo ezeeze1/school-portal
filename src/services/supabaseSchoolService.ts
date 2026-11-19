@@ -25,6 +25,12 @@ import {
   UserProfile,
   UserRole,
 } from '../types';
+import {
+  ClassDependencyCounts,
+  formatClassDependencyError,
+  formatSupabaseClassError,
+  sortSchoolClasses,
+} from '../lib/classManagement';
 
 export interface SupabasePortalSnapshot {
   systemSettings?: SystemSessionTerm;
@@ -246,11 +252,11 @@ const fromParentRow = (r: Record<string, any>): Parent => ({
 
 const toClassRow = (c: SchoolClass) => ({
   id: c.id,
-  name: c.name,
+  name: c.name.trim(),
   category: c.category,
-  arms: c.arms ?? [],
-  class_teacher_id: c.classTeacherId ?? null,
-  capacity: c.capacity,
+  arms: Array.isArray(c.arms) ? c.arms : [],
+  class_teacher_id: c.classTeacherId?.trim() || null,
+  capacity: Number(c.capacity),
 });
 
 const fromClassRow = (r: Record<string, any>): SchoolClass => ({
@@ -1035,6 +1041,223 @@ export const supabaseSchoolService = {
 
   upsertParent: (parent: Parent) =>
     safeUpsert('parents', toParentRow(parent)),
+
+  fetchClasses: async (): Promise<{ ok: boolean; data: SchoolClass[]; error?: string }> => {
+    if (!supabase) {
+      return { ok: false, data: [], error: 'Supabase is not configured.' };
+    }
+    try {
+      const { data, error } = await supabase
+        .from('classes')
+        .select('id, name, category, arms, class_teacher_id, capacity');
+      if (error) {
+        return {
+          ok: false,
+          data: [],
+          error: formatSupabaseClassError(error.message, error.code),
+        };
+      }
+      return {
+        ok: true,
+        data: sortSchoolClasses((data ?? []).map(fromClassRow)),
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        data: [],
+        error: err instanceof Error ? err.message : 'Unable to load classes from Supabase.',
+      };
+    }
+  },
+
+  createClass: async (
+    cls: SchoolClass
+  ): Promise<{ ok: boolean; data?: SchoolClass; error?: string }> => {
+    if (!supabase) {
+      return { ok: false, error: 'Supabase is not configured.' };
+    }
+    try {
+      const { data, error } = await supabase
+        .from('classes')
+        .insert(toClassRow(cls))
+        .select('id, name, category, arms, class_teacher_id, capacity')
+        .single();
+      if (error || !data) {
+        return {
+          ok: false,
+          error: formatSupabaseClassError(error?.message || 'Unable to create class.', error?.code, cls.name),
+        };
+      }
+      return { ok: true, data: fromClassRow(data) };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to create class in Supabase.',
+      };
+    }
+  },
+
+  updateClass: async (
+    cls: SchoolClass,
+    options?: { previousName?: string }
+  ): Promise<{ ok: boolean; data?: SchoolClass; error?: string }> => {
+    if (!supabase) {
+      return { ok: false, error: 'Supabase is not configured.' };
+    }
+    try {
+      const row = toClassRow(cls);
+      const { data, error } = await supabase
+        .from('classes')
+        .update({
+          name: row.name,
+          category: row.category,
+          arms: row.arms,
+          class_teacher_id: row.class_teacher_id,
+          capacity: row.capacity,
+        })
+        .eq('id', cls.id)
+        .select('id, name, category, arms, class_teacher_id, capacity')
+        .single();
+      if (error || !data) {
+        return {
+          ok: false,
+          error: formatSupabaseClassError(error?.message || 'Unable to update class.', error?.code, cls.name),
+        };
+      }
+
+      const updated = fromClassRow(data);
+
+      // Keep denormalized students.class_name aligned if the class name changed
+      if (options?.previousName && options.previousName !== updated.name) {
+        const { error: syncErr } = await supabase
+          .from('students')
+          .update({ class_name: updated.name })
+          .eq('class_id', cls.id);
+        if (syncErr) {
+          console.warn(`[Supabase] Could not sync student class_name for "${cls.id}": ${syncErr.message}`);
+        }
+      }
+
+      return { ok: true, data: updated };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to update class in Supabase.',
+      };
+    }
+  },
+
+  getClassDependencyCounts: async (
+    classId: string
+  ): Promise<{ ok: boolean; counts?: ClassDependencyCounts; error?: string }> => {
+    if (!supabase) {
+      return { ok: false, error: 'Supabase is not configured.' };
+    }
+    const countByColumn = async (table: string, column: string): Promise<number> => {
+      const { count, error } = await supabase!
+        .from(table)
+        .select('id', { count: 'exact', head: true })
+        .eq(column, classId);
+      if (error) {
+        throw new Error(`Could not verify linked records in "${table}": ${error.message}`);
+      }
+      return count ?? 0;
+    };
+
+    try {
+      const [
+        students,
+        scores,
+        terminalResults,
+        attendance,
+        cbtExams,
+        assignments,
+        studyNotes,
+        formTeachers,
+      ] = await Promise.all([
+        countByColumn('students', 'class_id'),
+        countByColumn('scores', 'class_id'),
+        countByColumn('terminal_results', 'class_id'),
+        countByColumn('attendance', 'class_id'),
+        countByColumn('cbt_exams', 'class_id'),
+        countByColumn('assignments', 'class_id'),
+        countByColumn('study_notes', 'class_id'),
+        countByColumn('teachers', 'form_class_id'),
+      ]);
+
+      return {
+        ok: true,
+        counts: {
+          students,
+          scores,
+          terminalResults,
+          attendance,
+          cbtExams,
+          assignments,
+          studyNotes,
+          formTeachers,
+          totalLinked:
+            students +
+            scores +
+            terminalResults +
+            attendance +
+            cbtExams +
+            assignments +
+            studyNotes +
+            formTeachers,
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Unable to verify whether this class is linked to existing school records.',
+      };
+    }
+  },
+
+  deleteClass: async (
+    id: string,
+    className?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) {
+      return { ok: false, error: 'Supabase is not configured.' };
+    }
+    try {
+      const depCheck = await supabaseSchoolService.getClassDependencyCounts(id);
+      if (!depCheck.ok || !depCheck.counts) {
+        return {
+          ok: false,
+          error:
+            depCheck.error ||
+            'Could not verify linked records before deletion. Class was not deleted.',
+        };
+      }
+
+      if (depCheck.counts.totalLinked > 0) {
+        return {
+          ok: false,
+          error: formatClassDependencyError(className || id, depCheck.counts),
+        };
+      }
+
+      const { error } = await supabase.from('classes').delete().eq('id', id);
+      if (error) {
+        return {
+          ok: false,
+          error: formatSupabaseClassError(error.message, error.code, className),
+        };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to delete class from Supabase.',
+      };
+    }
+  },
 
   upsertClass: (cls: SchoolClass) =>
     safeUpsert('classes', toClassRow(cls)),

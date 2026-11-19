@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key } from 'lucide-react';
+import { Users, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key, School } from 'lucide-react';
 
 export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
-  const { currentUser, adminCredentials, students, teachers, parents, applications, subjects, addSubject, systemSettings } = useSchool();
+  const { currentUser, adminCredentials, students, teachers, parents, classes, applications, subjects, addSubject, systemSettings } = useSchool();
 
   const adminName = currentUser?.name || adminCredentials.name || 'System Administrator';
 
@@ -102,7 +102,9 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
         >
           <span className="text-xs font-bold uppercase text-slate-500">Total Enrolled Students</span>
           <p className="font-serif font-black text-3xl text-slate-900 dark:text-white">{students.length}</p>
-          <p className="text-[11px] text-emerald-600 font-semibold">Active in 12 Classes</p>
+          <p className="text-[11px] text-emerald-600 font-semibold">
+            Active in {classes.length} {classes.length === 1 ? 'Class' : 'Classes'}
+          </p>
         </div>
 
         <div
@@ -150,6 +152,17 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           
+          <button
+            onClick={() => onNavigate('classes')}
+            className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-1 transition-all border border-slate-200 dark:border-slate-700"
+          >
+            <School className="w-6 h-6 text-indigo-500 mb-2" />
+            <p className="font-bold text-xs text-slate-900 dark:text-white">Class Management</p>
+            <p className="text-[11px] text-slate-500">
+              Create & manage JSS 1–SS 3 classes, arms & form teachers ({classes.length} active)
+            </p>
+          </button>
+
           <button
             onClick={() => onNavigate('students')}
             className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-1 transition-all border border-slate-200 dark:border-slate-700"

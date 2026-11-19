@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
 import {
@@ -14,18 +14,25 @@ import {
   Check,
   Printer,
   ShieldCheck,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 interface StudentManagerProps {
   readOnly?: boolean;
+  onNavigateToClasses?: () => void;
 }
 
-export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false }) => {
+export const StudentManager: React.FC<StudentManagerProps> = ({
+  readOnly = false,
+  onNavigateToClasses,
+}) => {
   const {
     activeRole,
     students,
     classes,
+    refreshClasses,
     addStudent,
     updateStudent,
     deleteStudent,
@@ -41,6 +48,8 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
   const [showPasscodeSlipsModal, setShowPasscodeSlipsModal] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const [isEnrolling, setIsEnrolling] = useState(false);
   const [studentToDelete, setStudentToDelete] = useState<Student | null>(null);
 
   // Helper generator
@@ -53,14 +62,15 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
     return code;
   };
 
-  // Enroll New Student Form state (never stores plaintext portal passwords)
+  // Enroll New Student Form state (classes loaded dynamically from Supabase)
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
     admissionNo: `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
-    classId: 'c-ss2',
-    className: 'SS 2',
+    classId: classes[0]?.id || '',
+    className: classes[0]?.name || '',
+    arm: classes[0]?.arms?.[0] || '',
     gender: 'Male' as 'Male' | 'Female',
     dob: '2010-04-12',
     parentName: '',
@@ -71,6 +81,42 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
 
   // Edit Student Form state
   const [editFormData, setEditFormData] = useState<Partial<Student>>({});
+
+  // Keep Student Enrollment class dropdown synced with live Supabase classes
+  useEffect(() => {
+    setFormData((prev) => {
+      if (classes.length === 0) {
+        if (!prev.classId && !prev.className) return prev;
+        return { ...prev, classId: '', className: '', arm: '' };
+      }
+      const existing = classes.find((c) => c.id === prev.classId);
+      if (existing) {
+        const nextArm =
+          existing.arms && existing.arms.length > 0
+            ? existing.arms.includes(prev.arm)
+              ? prev.arm
+              : existing.arms[0]
+            : '';
+        if (existing.name === prev.className && nextArm === prev.arm) return prev;
+        return { ...prev, className: existing.name, arm: nextArm };
+      }
+      const first = classes[0];
+      return {
+        ...prev,
+        classId: first.id,
+        className: first.name,
+        arm: first.arms?.[0] || '',
+      };
+    });
+  }, [classes]);
+
+  useEffect(() => {
+    if (!isReadOnly) {
+      void refreshClasses();
+    }
+    // Load latest classes from Supabase when admin opens Student SIS Manager
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReadOnly]);
 
   const filteredStudents = students.filter(
     (s) =>
@@ -104,9 +150,11 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isReadOnly) return;
+    if (isReadOnly || isEnrolling) return;
+
+    setEnrollError(null);
 
     const firstName = formData.firstName.trim();
     const lastName = formData.lastName.trim();
@@ -114,12 +162,17 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
     const parentPhone = formData.parentPhone.trim();
 
     if (!firstName || !lastName || !parentName || !parentPhone) {
-      setNotification('Please complete all required student and guardian fields.');
-      setTimeout(() => setNotification(null), 3500);
+      setEnrollError('Please complete all required student and guardian fields.');
       return;
     }
 
     const selCls = classes.find((c) => c.id === formData.classId);
+    if (!selCls) {
+      setEnrollError(
+        'Please select a valid class. Create classes in Class Management before enrolling students.'
+      );
+      return;
+    }
 
     const newStd: Omit<Student, 'id'> = {
       firstName,
@@ -127,8 +180,9 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
       email: formData.email.trim() || undefined,
       admissionNo:
         formData.admissionNo.trim() || `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
-      classId: formData.classId,
-      className: selCls?.name || formData.className,
+      classId: selCls.id,
+      className: selCls.name,
+      arm: formData.arm.trim() || undefined,
       gender: formData.gender,
       dob: formData.dob,
       parentName,
@@ -140,26 +194,41 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
         'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=300&q=80',
     };
 
-    addStudent(newStd);
-    setShowAddModal(false);
-    setFormData({
-      firstName: '',
-      lastName: '',
-      email: '',
-      admissionNo: `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
-      classId: 'c-ss2',
-      className: 'SS 2',
-      gender: 'Male',
-      dob: '2010-04-12',
-      parentName: '',
-      parentPhone: '',
-      resultPasscode: createAlphanumericCode(),
-      address: 'Lagos, Nigeria',
-    });
+    setIsEnrolling(true);
+    try {
+      const res = await addStudent(newStd);
+      if (!res.ok) {
+        setEnrollError(res.error || 'Could not enroll student in Supabase.');
+        return;
+      }
+
+      const defaultClass = classes[0];
+      setShowAddModal(false);
+      setFormData({
+        firstName: '',
+        lastName: '',
+        email: '',
+        admissionNo: `STD/2026/${Math.floor(1000 + Math.random() * 9000)}`,
+        classId: defaultClass?.id || '',
+        className: defaultClass?.name || '',
+        arm: defaultClass?.arms?.[0] || '',
+        gender: 'Male',
+        dob: '2010-04-12',
+        parentName: '',
+        parentPhone: '',
+        resultPasscode: createAlphanumericCode(),
+        address: 'Lagos, Nigeria',
+      });
+      setNotification(`Student "${firstName} ${lastName}" enrolled into ${selCls.name}.`);
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setIsEnrolling(false);
+    }
   };
 
   const handleStartEdit = (std: Student) => {
     if (isReadOnly) return;
+    void refreshClasses();
     setEditingStudent(std);
     setEditFormData({ ...std });
   };
@@ -167,11 +236,15 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isReadOnly || !editingStudent) return;
+    const selectedEditClass = classes.find((c) => c.id === editFormData.classId);
     updateStudent(editingStudent.id, {
       ...editFormData,
       firstName: editFormData.firstName?.trim() || editingStudent.firstName,
       lastName: editFormData.lastName?.trim() || editingStudent.lastName,
       email: editFormData.email?.trim() || undefined,
+      classId: selectedEditClass?.id || editingStudent.classId,
+      className: selectedEditClass?.name || editingStudent.className,
+      arm: editFormData.arm?.trim() || undefined,
       parentName: editFormData.parentName?.trim() || editingStudent.parentName,
       parentPhone: editFormData.parentPhone?.trim() || editingStudent.parentPhone,
     });
@@ -234,7 +307,16 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
 
               <button
                 onClick={() => {
-                  setFormData((prev) => ({ ...prev, resultPasscode: createAlphanumericCode() }));
+                  setEnrollError(null);
+                  void refreshClasses();
+                  const defaultClass = classes.find((c) => c.id === formData.classId) || classes[0];
+                  setFormData((prev) => ({
+                    ...prev,
+                    classId: defaultClass?.id || '',
+                    className: defaultClass?.name || '',
+                    arm: defaultClass?.arms?.[0] || '',
+                    resultPasscode: createAlphanumericCode(),
+                  }));
                   setShowAddModal(true);
                 }}
                 className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 whitespace-nowrap shadow-sm"
@@ -394,6 +476,33 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
               access passcode.
             </p>
 
+            {enrollError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl flex items-start gap-2 text-xs text-red-600 dark:text-red-400 font-bold">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{enrollError}</span>
+              </div>
+            )}
+
+            {classes.length === 0 && (
+              <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
+                <span className="font-semibold">
+                  No classes exist in Supabase yet. Create a class before enrolling students.
+                </span>
+                {onNavigateToClasses && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddModal(false);
+                      onNavigateToClasses();
+                    }}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-[11px] whitespace-nowrap self-start sm:self-auto"
+                  >
+                    Open Class Management
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <label className="block font-semibold mb-1">First Name *</label>
@@ -422,24 +531,55 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
               <div className="col-span-2 sm:col-span-1">
                 <label className="block font-semibold mb-1">Class *</label>
                 <select
+                  required
                   value={formData.classId}
+                  disabled={classes.length === 0}
                   onChange={(e) => {
                     const sel = classes.find((c) => c.id === e.target.value);
+                    setEnrollError(null);
                     setFormData({
                       ...formData,
                       classId: e.target.value,
-                      className: sel?.name || 'SS 2',
+                      className: sel?.name || '',
+                      arm: sel?.arms?.[0] || '',
                     });
                   }}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl disabled:opacity-60"
                 >
-                  {classes.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {classes.length === 0 ? (
+                    <option value="">No classes available</option>
+                  ) : (
+                    classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.category})
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
+
+              {(() => {
+                const selectedClass = classes.find((c) => c.id === formData.classId);
+                if (!selectedClass || !selectedClass.arms || selectedClass.arms.length === 0) {
+                  return null;
+                }
+                return (
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block font-semibold mb-1">Class Arm / Stream</label>
+                    <select
+                      value={formData.arm}
+                      onChange={(e) => setFormData({ ...formData, arm: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    >
+                      {selectedClass.arms.map((arm) => (
+                        <option key={arm} value={arm}>
+                          {arm}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="block font-semibold mb-1">Gender *</label>
@@ -530,16 +670,19 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
             <div className="pt-4 flex justify-between">
               <button
                 type="button"
+                disabled={isEnrolling}
                 onClick={() => setShowAddModal(false)}
-                className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-5 py-2 rounded-xl text-xs"
+                className="bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold px-5 py-2 rounded-xl text-xs disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-6 py-2 rounded-xl text-xs shadow-md"
+                disabled={isEnrolling || classes.length === 0}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-6 py-2 rounded-xl text-xs shadow-md flex items-center gap-1.5 disabled:opacity-60"
               >
-                Save Student Record
+                {isEnrolling && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isEnrolling ? 'Saving...' : 'Save Student Record'}
               </button>
             </div>
           </form>
@@ -583,6 +726,61 @@ export const StudentManager: React.FC<StudentManagerProps> = ({ readOnly = false
                   onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
                 />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">Class</label>
+                <select
+                  value={editFormData.classId || ''}
+                  onChange={(e) => {
+                    const sel = classes.find((c) => c.id === e.target.value);
+                    setEditFormData({
+                      ...editFormData,
+                      classId: e.target.value,
+                      className: sel?.name || editFormData.className,
+                      arm: sel?.arms?.[0] || '',
+                    });
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                >
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">Class Arm / Stream</label>
+                {(() => {
+                  const sel = classes.find((c) => c.id === editFormData.classId);
+                  if (sel && sel.arms && sel.arms.length > 0) {
+                    return (
+                      <select
+                        value={editFormData.arm || ''}
+                        onChange={(e) => setEditFormData({ ...editFormData, arm: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                      >
+                        <option value="">None</option>
+                        {sel.arms.map((arm) => (
+                          <option key={arm} value={arm}>
+                            {arm}
+                          </option>
+                        ))}
+                      </select>
+                    );
+                  }
+                  return (
+                    <input
+                      type="text"
+                      value={editFormData.arm || ''}
+                      onChange={(e) => setEditFormData({ ...editFormData, arm: e.target.value })}
+                      placeholder="Optional arm"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
+                    />
+                  );
+                })()}
               </div>
 
               <div className="col-span-2">

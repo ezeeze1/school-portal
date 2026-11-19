@@ -36,21 +36,21 @@ STABLE
 AS $$
   SELECT to_regclass(format('public.%I', p_table)) IS NOT NULL
      AND (
-       SELECT count(DISTINCT column_name)
-       FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name = p_table
-         AND column_name = ANY(p_cols)
+       SELECT count(DISTINCT col.column_name)
+       FROM information_schema.columns AS col
+       WHERE col.table_schema = 'public'
+         AND col.table_name = p_table
+         AND col.column_name = ANY(p_cols)
      ) = COALESCE(array_length(p_cols, 1), 0);
 $$;
 
-CREATE OR REPLACE FUNCTION pg_temp.run_preflight_checks()
+CREATE OR REPLACE FUNCTION pg_temp.run_preflight_checks_impl()
 RETURNS TABLE (
-  check_category text,
-  target_name text,
-  status text,
-  finding_count bigint,
-  details text
+  out_check_category text,
+  out_target_name text,
+  out_status text,
+  out_finding_count bigint,
+  out_details text
 )
 LANGUAGE plpgsql
 AS $$
@@ -74,9 +74,9 @@ BEGIN
   -- 01. OVERALL DATABASE STATE & EXPECTED 27-TABLE INVENTORY
   -- --------------------------------------------------------------------------
   SELECT count(*) INTO v_existing_count
-  FROM pg_tables
-  WHERE schemaname = 'public'
-    AND tablename = ANY(v_expected_tables);
+  FROM pg_tables AS pt
+  WHERE pt.schemaname = 'public'
+    AND pt.tablename = ANY(v_expected_tables);
 
   IF v_existing_count = 0 THEN
     RETURN QUERY SELECT
@@ -241,7 +241,7 @@ BEGIN
   )
   SELECT
     (SELECT count(*) FROM expected_constraints),
-    (SELECT count(*) FROM present_cons WHERE exists_flag)
+    (SELECT count(*) FROM present_cons AS pc WHERE pc.exists_flag)
   INTO v_total_expected, v_total_present;
 
   IF v_existing_count = 0 THEN
@@ -787,10 +787,10 @@ BEGIN
       '0 of 27 tables have RLS enabled; 0 of 74 expected policies exist (database is empty).'::text;
   ELSE
     SELECT count(*) INTO v_cnt
-    FROM pg_tables
-    WHERE schemaname = 'public'
-      AND tablename = ANY(v_expected_tables)
-      AND rowsecurity = true;
+    FROM pg_tables AS pt
+    WHERE pt.schemaname = 'public'
+      AND pt.tablename = ANY(v_expected_tables)
+      AND pt.rowsecurity = true;
 
     RETURN QUERY SELECT
       '12_SECURITY_POLICY_INVENTORY'::text,
@@ -801,16 +801,16 @@ BEGIN
 
     -- Flag existing tables with RLS disabled
     FOR v_rec IN
-      SELECT tablename
-      FROM pg_tables
-      WHERE schemaname = 'public'
-        AND tablename = ANY(v_expected_tables)
-        AND NOT rowsecurity
-      ORDER BY tablename
+      SELECT pt.tablename AS tbl_name
+      FROM pg_tables AS pt
+      WHERE pt.schemaname = 'public'
+        AND pt.tablename = ANY(v_expected_tables)
+        AND NOT pt.rowsecurity
+      ORDER BY pt.tablename
     LOOP
       RETURN QUERY SELECT
         '12_SECURITY_POLICY_INVENTORY'::text,
-        v_rec.tablename,
+        v_rec.tbl_name,
         'RLS_DISABLED'::text,
         1::bigint,
         'Row Level Security is NOT enabled on existing portal table.'::text;
@@ -974,102 +974,102 @@ BEGIN
   -- 04. DUPLICATE DETECTION FOR UNIQUE INDEXES (20 UNIQUE INDEXES)
   -- --------------------------------------------------------------------------
   IF pg_temp.has_table_cols('classes', ARRAY['name']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.classes GROUP BY name HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.classes AS c GROUP BY c.name HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','classes(name)','DUPLICATE_FOUND',v_cnt,'Blocks uq_classes_name'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('subjects', ARRAY['code']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.subjects GROUP BY code HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.subjects AS sb GROUP BY sb.code HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','subjects(code)','DUPLICATE_FOUND',v_cnt,'Blocks uq_subjects_code'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('students', ARRAY['admission_no']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students GROUP BY admission_no HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students AS s GROUP BY s.admission_no HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','students(admission_no)','DUPLICATE_FOUND',v_cnt,'Blocks uq_students_admission_no'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('students', ARRAY['email']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students WHERE email IS NOT NULL AND trim(email) <> '' GROUP BY lower(email) HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students AS s WHERE s.email IS NOT NULL AND trim(s.email) <> '' GROUP BY lower(s.email) HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','students(lower(email))','DUPLICATE_FOUND',v_cnt,'Blocks uq_students_email'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('students', ARRAY['auth_user_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students WHERE auth_user_id IS NOT NULL GROUP BY auth_user_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.students AS s WHERE s.auth_user_id IS NOT NULL GROUP BY s.auth_user_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','students(auth_user_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_students_auth_user'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('teachers', ARRAY['staff_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers GROUP BY staff_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers AS t GROUP BY t.staff_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','teachers(staff_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_teachers_staff_id'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('teachers', ARRAY['email']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers GROUP BY lower(email) HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers AS t GROUP BY lower(t.email) HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','teachers(lower(email))','DUPLICATE_FOUND',v_cnt,'Blocks uq_teachers_email'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('teachers', ARRAY['auth_user_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers WHERE auth_user_id IS NOT NULL GROUP BY auth_user_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.teachers AS t WHERE t.auth_user_id IS NOT NULL GROUP BY t.auth_user_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','teachers(auth_user_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_teachers_auth_user'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('parents', ARRAY['parent_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents GROUP BY parent_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents AS p GROUP BY p.parent_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','parents(parent_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_parents_parent_id'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('parents', ARRAY['email']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents GROUP BY lower(email) HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents AS p GROUP BY lower(p.email) HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','parents(lower(email))','DUPLICATE_FOUND',v_cnt,'Blocks uq_parents_email'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('parents', ARRAY['auth_user_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents WHERE auth_user_id IS NOT NULL GROUP BY auth_user_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.parents AS p WHERE p.auth_user_id IS NOT NULL GROUP BY p.auth_user_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','parents(auth_user_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_parents_auth_user'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('scores', ARRAY['student_id','subject_id','session_id','term']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.scores GROUP BY student_id, subject_id, session_id, term HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.scores AS sc GROUP BY sc.student_id, sc.subject_id, sc.session_id, sc.term HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','scores(student_id,subject_id,session_id,term)','DUPLICATE_FOUND',v_cnt,'Blocks uq_scores_student_subject_term'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('terminal_results', ARRAY['student_id','session_id','term']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.terminal_results GROUP BY student_id, session_id, term HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.terminal_results AS tr GROUP BY tr.student_id, tr.session_id, tr.term HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','terminal_results(student_id,session_id,term)','DUPLICATE_FOUND',v_cnt,'Blocks uq_terminal_results_student_term'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('attendance', ARRAY['student_id','date']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.attendance GROUP BY student_id, date HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.attendance AS a GROUP BY a.student_id, a.date HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','attendance(student_id,date)','DUPLICATE_FOUND',v_cnt,'Blocks uq_attendance_student_date'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_attempts', ARRAY['exam_id','student_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.cbt_attempts GROUP BY exam_id, student_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.cbt_attempts AS ca GROUP BY ca.exam_id, ca.student_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','cbt_attempts(exam_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_cbt_attempts_exam_student'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_exam_sessions', ARRAY['exam_id','student_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.cbt_exam_sessions GROUP BY exam_id, student_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.cbt_exam_sessions AS ces GROUP BY ces.exam_id, ces.student_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','cbt_exam_sessions(exam_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_cbt_exam_sessions_exam_student'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('assignment_submissions', ARRAY['assignment_id','student_id']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.assignment_submissions GROUP BY assignment_id, student_id HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.assignment_submissions AS sub GROUP BY sub.assignment_id, sub.student_id HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','assignment_submissions(assignment_id,student_id)','DUPLICATE_FOUND',v_cnt,'Blocks uq_assignment_submissions_pair'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('online_applications', ARRAY['application_number']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.online_applications GROUP BY application_number HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.online_applications AS oa GROUP BY oa.application_number HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','online_applications(application_number)','DUPLICATE_FOUND',v_cnt,'Blocks uq_online_applications_number'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('fee_records', ARRAY['receipt_no']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.fee_records GROUP BY receipt_no HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.fee_records AS fr GROUP BY fr.receipt_no HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','fee_records(receipt_no)','DUPLICATE_FOUND',v_cnt,'Blocks uq_fee_records_receipt'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('fee_records', ARRAY['student_id','session','term']) THEN
-    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.fee_records GROUP BY student_id, session, term HAVING count(*) > 1) d;
+    SELECT count(*) INTO v_cnt FROM (SELECT 1 FROM public.fee_records AS fr GROUP BY fr.student_id, fr.session, fr.term HAVING count(*) > 1) d;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '04_DUPLICATE_KEY','fee_records(student_id,session,term)','DUPLICATE_FOUND',v_cnt,'Blocks uq_fee_records_student_term'; END IF;
   END IF;
 
@@ -1222,46 +1222,46 @@ BEGIN
   -- 06. JSONB DATA-TYPE CHECKS (ARRAY VS OBJECT)
   -- --------------------------------------------------------------------------
   IF pg_temp.has_table_cols('system_settings', ARRAY['academic_sessions']) THEN
-    SELECT count(*) INTO v_cnt FROM public.system_settings WHERE jsonb_typeof(academic_sessions) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.system_settings AS ss WHERE jsonb_typeof(ss.academic_sessions) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','system_settings.academic_sessions','INVALID_JSON_TYPE',v_cnt,'Expected JSONB array'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('classes', ARRAY['arms']) THEN
-    SELECT count(*) INTO v_cnt FROM public.classes WHERE jsonb_typeof(arms) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.classes AS c WHERE jsonb_typeof(c.arms) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','classes.arms','INVALID_JSON_TYPE',v_cnt,'Expected JSONB array'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('teachers', ARRAY['subject_ids','subjects_taught','classes_taught']) THEN
-    SELECT count(*) INTO v_cnt FROM public.teachers
-    WHERE jsonb_typeof(subject_ids) IS DISTINCT FROM 'array'
-       OR jsonb_typeof(subjects_taught) IS DISTINCT FROM 'array'
-       OR jsonb_typeof(classes_taught) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.teachers AS t
+    WHERE jsonb_typeof(t.subject_ids) IS DISTINCT FROM 'array'
+       OR jsonb_typeof(t.subjects_taught) IS DISTINCT FROM 'array'
+       OR jsonb_typeof(t.classes_taught) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','teachers.(subject_ids|subjects_taught|classes_taught)','INVALID_JSON_TYPE',v_cnt,'Expected JSONB arrays'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('parents', ARRAY['student_ids']) THEN
-    SELECT count(*) INTO v_cnt FROM public.parents WHERE jsonb_typeof(student_ids) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.parents AS p WHERE jsonb_typeof(p.student_ids) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','parents.student_ids','INVALID_JSON_TYPE',v_cnt,'Expected JSONB array'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('terminal_results', ARRAY['scores','psychomotor']) THEN
-    SELECT count(*) INTO v_cnt FROM public.terminal_results
-    WHERE jsonb_typeof(scores) IS DISTINCT FROM 'array' OR jsonb_typeof(psychomotor) IS DISTINCT FROM 'object';
+    SELECT count(*) INTO v_cnt FROM public.terminal_results AS tr
+    WHERE jsonb_typeof(tr.scores) IS DISTINCT FROM 'array' OR jsonb_typeof(tr.psychomotor) IS DISTINCT FROM 'object';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','terminal_results.(scores|psychomotor)','INVALID_JSON_TYPE',v_cnt,'Expected scores=array and psychomotor=object'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_exams', ARRAY['questions']) THEN
-    SELECT count(*) INTO v_cnt FROM public.cbt_exams WHERE jsonb_typeof(questions) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.cbt_exams AS ce WHERE jsonb_typeof(ce.questions) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','cbt_exams.questions','INVALID_JSON_TYPE',v_cnt,'Expected JSONB array'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_attempts', ARRAY['answers']) THEN
-    SELECT count(*) INTO v_cnt FROM public.cbt_attempts WHERE jsonb_typeof(answers) IS DISTINCT FROM 'object';
+    SELECT count(*) INTO v_cnt FROM public.cbt_attempts AS ca WHERE jsonb_typeof(ca.answers) IS DISTINCT FROM 'object';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','cbt_attempts.answers','INVALID_JSON_TYPE',v_cnt,'Expected JSONB object'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_exam_sessions', ARRAY['question_order']) THEN
-    SELECT count(*) INTO v_cnt FROM public.cbt_exam_sessions WHERE jsonb_typeof(question_order) IS DISTINCT FROM 'array';
+    SELECT count(*) INTO v_cnt FROM public.cbt_exam_sessions AS ces WHERE jsonb_typeof(ces.question_order) IS DISTINCT FROM 'array';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '06_JSONB_TYPE','cbt_exam_sessions.question_order','INVALID_JSON_TYPE',v_cnt,'Expected JSONB array'; END IF;
   END IF;
 
@@ -1269,63 +1269,63 @@ BEGIN
   -- 07. INVALID DATES, RANGES & DOMAIN CHECK CONSTRAINTS
   -- --------------------------------------------------------------------------
   IF pg_temp.has_table_cols('user_profiles', ARRAY['role']) THEN
-    SELECT count(*) INTO v_cnt FROM public.user_profiles WHERE role NOT IN ('admin','teacher','student','parent');
+    SELECT count(*) INTO v_cnt FROM public.user_profiles AS up WHERE up.role NOT IN ('admin','teacher','student','parent');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','user_profiles.role','INVALID_DOMAIN',v_cnt,'Expected admin/teacher/student/parent'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('students', ARRAY['dob','gender','status']) THEN
-    SELECT count(*) INTO v_cnt FROM public.students WHERE dob::text !~ '^\d{4}-\d{2}-\d{2}$';
+    SELECT count(*) INTO v_cnt FROM public.students AS s WHERE s.dob::text !~ '^\d{4}-\d{2}-\d{2}$';
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','students.dob','INVALID_FORMAT',v_cnt,'Expected YYYY-MM-DD'; END IF;
-    SELECT count(*) INTO v_cnt FROM public.students WHERE gender NOT IN ('Male','Female') OR status NOT IN ('Active','Graduated','Suspended');
+    SELECT count(*) INTO v_cnt FROM public.students AS s WHERE s.gender NOT IN ('Male','Female') OR s.status NOT IN ('Active','Graduated','Suspended');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','students.(gender|status)','INVALID_DOMAIN',v_cnt,'Violates gender/status CHECK'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('scores', ARRAY['term','ca1_score','ca2_score','exam_score','total_score','grade']) THEN
-    SELECT count(*) INTO v_cnt FROM public.scores
-    WHERE term NOT IN ('1st Term','2nd Term','3rd Term')
-       OR ca1_score < 0 OR ca1_score > 20
-       OR ca2_score < 0 OR ca2_score > 20
-       OR exam_score < 0 OR exam_score > 60
-       OR total_score < 0 OR total_score > 100
-       OR grade NOT IN ('A','B','C','D','E','F');
+    SELECT count(*) INTO v_cnt FROM public.scores AS sc
+    WHERE sc.term NOT IN ('1st Term','2nd Term','3rd Term')
+       OR sc.ca1_score < 0 OR sc.ca1_score > 20
+       OR sc.ca2_score < 0 OR sc.ca2_score > 20
+       OR sc.exam_score < 0 OR sc.exam_score > 60
+       OR sc.total_score < 0 OR sc.total_score > 100
+       OR sc.grade NOT IN ('A','B','C','D','E','F');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','scores','INVALID_RANGE_OR_ENUM',v_cnt,'Violates chk_scores_ranges'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('terminal_results', ARRAY['term','average_score','position_in_class','total_students_in_class','days_present','days_absent','total_school_days','status']) THEN
-    SELECT count(*) INTO v_cnt FROM public.terminal_results
-    WHERE term NOT IN ('1st Term','2nd Term','3rd Term')
-       OR average_score < 0 OR average_score > 100
-       OR position_in_class < 1 OR total_students_in_class < 1
-       OR days_present < 0 OR days_absent < 0 OR total_school_days < 0
-       OR status NOT IN ('Draft','Published');
+    SELECT count(*) INTO v_cnt FROM public.terminal_results AS tr
+    WHERE tr.term NOT IN ('1st Term','2nd Term','3rd Term')
+       OR tr.average_score < 0 OR tr.average_score > 100
+       OR tr.position_in_class < 1 OR tr.total_students_in_class < 1
+       OR tr.days_present < 0 OR tr.days_absent < 0 OR tr.total_school_days < 0
+       OR tr.status NOT IN ('Draft','Published');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','terminal_results','INVALID_RANGE_OR_ENUM',v_cnt,'Violates chk_terminal_results_valid'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('attendance', ARRAY['date','status']) THEN
-    SELECT count(*) INTO v_cnt FROM public.attendance WHERE date::text !~ '^\d{4}-\d{2}-\d{2}$' OR status NOT IN ('Present','Absent','Late','Excused');
+    SELECT count(*) INTO v_cnt FROM public.attendance AS a WHERE a.date::text !~ '^\d{4}-\d{2}-\d{2}$' OR a.status NOT IN ('Present','Absent','Late','Excused');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','attendance.(date|status)','INVALID_VALUE',v_cnt,'Invalid date or attendance status'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_exams', ARRAY['start_date','end_date','duration_minutes','pass_percentage']) THEN
-    SELECT count(*) INTO v_cnt FROM public.cbt_exams
-    WHERE start_date::text !~ '^\d{4}-\d{2}-\d{2}$'
-       OR end_date::text !~ '^\d{4}-\d{2}-\d{2}$'
-       OR duration_minutes <= 0
-       OR pass_percentage < 0 OR pass_percentage > 100;
+    SELECT count(*) INTO v_cnt FROM public.cbt_exams AS ce
+    WHERE ce.start_date::text !~ '^\d{4}-\d{2}-\d{2}$'
+       OR ce.end_date::text !~ '^\d{4}-\d{2}-\d{2}$'
+       OR ce.duration_minutes <= 0
+       OR ce.pass_percentage < 0 OR ce.pass_percentage > 100;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','cbt_exams','INVALID_VALUE',v_cnt,'Invalid dates or numeric bounds'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('cbt_questions', ARRAY['correct_option','marks']) THEN
-    SELECT count(*) INTO v_cnt FROM public.cbt_questions WHERE correct_option NOT IN ('A','B','C','D') OR marks <= 0;
+    SELECT count(*) INTO v_cnt FROM public.cbt_questions AS cq WHERE cq.correct_option NOT IN ('A','B','C','D') OR cq.marks <= 0;
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','cbt_questions','INVALID_VALUE',v_cnt,'Violates chk_cbt_questions_valid'; END IF;
   END IF;
 
   IF pg_temp.has_table_cols('fee_records', ARRAY['term','tuition','development_fee','ict_fee','uniform_fee','total','amount_paid','balance','status']) THEN
-    SELECT count(*) INTO v_cnt FROM public.fee_records
-    WHERE term NOT IN ('1st Term','2nd Term','3rd Term')
-       OR tuition < 0 OR development_fee < 0 OR ict_fee < 0 OR uniform_fee < 0
-       OR total < 0 OR amount_paid < 0 OR balance < 0
-       OR status NOT IN ('Paid','Partial','Unpaid');
+    SELECT count(*) INTO v_cnt FROM public.fee_records AS fr
+    WHERE fr.term NOT IN ('1st Term','2nd Term','3rd Term')
+       OR fr.tuition < 0 OR fr.development_fee < 0 OR fr.ict_fee < 0 OR fr.uniform_fee < 0
+       OR fr.total < 0 OR fr.amount_paid < 0 OR fr.balance < 0
+       OR fr.status NOT IN ('Paid','Partial','Unpaid');
     IF v_cnt > 0 THEN RETURN QUERY SELECT '07_VALUE_CONSTRAINT','fee_records','INVALID_VALUE',v_cnt,'Violates chk_fee_records_valid'; END IF;
   END IF;
 
@@ -1333,6 +1333,30 @@ BEGIN
 END;
 $$;
 
-SELECT *
-FROM pg_temp.run_preflight_checks()
-ORDER BY check_category, target_name;
+CREATE OR REPLACE FUNCTION pg_temp.run_preflight_checks()
+RETURNS TABLE (
+  check_category text,
+  target_name text,
+  status text,
+  finding_count bigint,
+  details text
+)
+LANGUAGE sql
+AS $$
+  SELECT
+    r.out_check_category AS check_category,
+    r.out_target_name AS target_name,
+    r.out_status AS status,
+    r.out_finding_count AS finding_count,
+    r.out_details AS details
+  FROM pg_temp.run_preflight_checks_impl() AS r;
+$$;
+
+SELECT
+  p.check_category,
+  p.target_name,
+  p.status,
+  p.finding_count,
+  p.details
+FROM pg_temp.run_preflight_checks() AS p
+ORDER BY p.check_category, p.target_name;

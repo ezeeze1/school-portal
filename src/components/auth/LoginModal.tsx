@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { UserRole } from '../../types';
 import { isSupabaseConfigured } from '../../lib/supabase';
@@ -33,6 +33,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [infoMsg, setInfoMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResetMode, setIsResetMode] = useState(false);
+  const isSubmittingRef = useRef(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -42,6 +43,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       setErrorMsg('');
       setInfoMsg('');
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
       setIsResetMode(false);
     }
   }, [isOpen, defaultRole]);
@@ -50,6 +52,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current) return;
+
     setErrorMsg('');
     setInfoMsg('');
 
@@ -71,6 +75,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
       const result = await signInWithPassword(cleanEmail, password);
@@ -80,15 +85,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         setErrorMsg(result.error || 'Invalid email or password.');
       }
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   };
 
   const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current) return;
+
     setErrorMsg('');
     setInfoMsg('');
 
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     try {
       const result = await sendPasswordResetEmail(email);
@@ -100,6 +109,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         setErrorMsg(result.error || 'Could not send password reset email.');
       }
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -169,13 +179,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   <input
                     type="email"
                     required
+                    disabled={isSubmitting}
                     value={email}
                     onChange={(e) => {
                       setEmail(e.target.value);
                       setErrorMsg('');
                     }}
                     placeholder="Enter your registered email address"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -195,12 +206,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => {
                   setIsResetMode(false);
                   setErrorMsg('');
                   setInfoMsg('');
                 }}
-                className="w-full text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 py-1.5"
+                className="w-full text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 py-1.5 disabled:opacity-60"
               >
                 Back to Portal Sign In
               </button>
@@ -214,11 +226,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <div className="relative">
                   <select
                     value={selectedRole}
+                    disabled={isSubmitting}
                     onChange={(e) => {
                       setSelectedRole(e.target.value as UserRole);
                       setErrorMsg('');
                     }}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500/20 transition-all cursor-pointer appearance-none pr-10"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500/20 transition-all cursor-pointer appearance-none pr-10 disabled:opacity-60"
                   >
                     <option value="student">Student Portal</option>
                     <option value="teacher">Teacher & Faculty Portal</option>
@@ -241,6 +254,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <input
                   type="email"
                   required
+                  disabled={isSubmitting}
                   autoComplete="email"
                   value={email}
                   onChange={(e) => {
@@ -248,7 +262,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     setErrorMsg('');
                   }}
                   placeholder="name@divineacademy.edu"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium disabled:opacity-60"
                 />
               </div>
 
@@ -259,12 +273,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   </label>
                   <button
                     type="button"
+                    disabled={isSubmitting}
                     onClick={() => {
                       setIsResetMode(true);
                       setErrorMsg('');
                       setInfoMsg('');
                     }}
-                    className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline"
+                    className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline disabled:opacity-60"
                   >
                     Forgot password?
                   </button>
@@ -272,11 +287,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <input
                   type="password"
                   required
+                  disabled={isSubmitting}
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your account password"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm focus:ring-2 focus:ring-amber-500/20 outline-none transition-all text-slate-900 dark:text-white font-medium disabled:opacity-60"
                 />
               </div>
 

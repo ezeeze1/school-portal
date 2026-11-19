@@ -238,12 +238,19 @@ export const Header: React.FC = () => {
             >
               Apply Online
             </button>
-            <button
-              onClick={() => openLoginForRole('student')}
-              className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2"
-            >
-              <User className="w-4 h-4 text-amber-400" /> Portal Login
-            </button>
+            {!currentUser && (
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  openLoginForRole('student');
+                }}
+                disabled={authLoading}
+                className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                <User className="w-4 h-4 text-amber-400" />
+                {authLoading ? 'Loading Session...' : 'Portal Login'}
+              </button>
+            )}
           </div>
         </div>
       )}

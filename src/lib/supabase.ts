@@ -21,9 +21,11 @@ export function normalizeSupabaseUrl(rawUrl: string): string {
   }
 }
 
-const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
+const rawSupabaseUrl =
+  typeof import.meta.env !== 'undefined' ? (import.meta.env.VITE_SUPABASE_URL ?? '') : '';
 const supabaseUrl = normalizeSupabaseUrl(rawSupabaseUrl);
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? '';
+const supabaseAnonKey =
+  typeof import.meta.env !== 'undefined' ? (import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? '') : '';
 
 const isValidHttpUrl = (value: string): boolean => {
   try {
@@ -45,6 +47,45 @@ export const isSupabaseConfigured: boolean =
   !supabaseUrl.includes('your-project') &&
   !supabaseAnonKey.includes('your-anon-key');
 
+const SUPABASE_SINGLETON_KEY = '__divine_academy_supabase_singleton__';
+
+interface CachedSupabaseClient {
+  cacheKey: string;
+  client: SupabaseClient;
+}
+
+/**
+ * Returns a single shared SupabaseClient instance for the given project URL and
+ * publishable/anon key across the entire browser runtime (preventing duplicate
+ * GoTrueClient instances and storage/lock contention on module reloads).
+ */
+export function getOrCreateSupabaseClient(url: string, anonKey: string): SupabaseClient {
+  const normalizedUrl = normalizeSupabaseUrl(url);
+  const trimmedKey = anonKey.trim();
+  const cacheKey = `${normalizedUrl}::${trimmedKey}`;
+  const globalStore = globalThis as Record<string, unknown>;
+  const cached = globalStore[SUPABASE_SINGLETON_KEY] as CachedSupabaseClient | undefined;
+
+  if (cached && cached.cacheKey === cacheKey && cached.client) {
+    return cached.client;
+  }
+
+  const client = createClient(normalizedUrl, trimmedKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
+
+  globalStore[SUPABASE_SINGLETON_KEY] = {
+    cacheKey,
+    client,
+  } satisfies CachedSupabaseClient;
+
+  return client;
+}
+
 /**
  * Reusable singleton Supabase client for frontend operations.
  * Uses only the public publishable/anon API key (never a secret/service-role key).
@@ -52,13 +93,7 @@ export const isSupabaseConfigured: boolean =
  * portal continues working seamlessly without crashing on boot.
  */
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    })
+  ? getOrCreateSupabaseClient(supabaseUrl, supabaseAnonKey)
   : null;
 
 /**

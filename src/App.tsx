@@ -134,7 +134,9 @@ const PasswordRecoveryModal: React.FC = () => {
 };
 
 const MainApp: React.FC = () => {
-  const { currentView, activeRole } = useSchool();
+  const { currentView, activeRole, currentUser } = useSchool();
+  const verifiedRole =
+    activeRole !== 'public' && currentUser?.role === activeRole ? activeRole : 'public';
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors duration-200">
@@ -143,13 +145,13 @@ const MainApp: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1">
-        {activeRole === 'student' ? (
+        {verifiedRole === 'student' ? (
           <StudentPortalLayout />
-        ) : activeRole === 'teacher' ? (
+        ) : verifiedRole === 'teacher' ? (
           <TeacherPortalLayout />
-        ) : activeRole === 'parent' ? (
+        ) : verifiedRole === 'parent' ? (
           <ParentPortalLayout />
-        ) : activeRole === 'admin' ? (
+        ) : verifiedRole === 'admin' ? (
           <AdminPortalLayout />
         ) : (
           /* Public Website Pages */
@@ -167,10 +169,10 @@ const MainApp: React.FC = () => {
       </main>
 
       {/* Footer (shown on public view) */}
-      {activeRole === 'public' && <Footer />}
+      {verifiedRole === 'public' && <Footer />}
 
       {/* Floating WhatsApp Action Button for Public Site */}
-      {activeRole === 'public' && <WhatsAppButton />}
+      {verifiedRole === 'public' && <WhatsAppButton />}
 
       <PasswordRecoveryModal />
     </div>
