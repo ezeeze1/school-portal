@@ -238,6 +238,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('08:00');
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
+  const [allowAnswerReview, setAllowAnswerReview] = useState<boolean | undefined>(undefined);
 
   // Manual Questions List (new questions always default to correctOption: 'A')
   const [questions, setQuestions] = useState<CBTQuestion[]>([
@@ -267,6 +268,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setStartDate(exam.startDate);
     setStartTime(exam.startTime || '08:00');
     setShuffleQuestions(exam.shuffleQuestions ?? true);
+    setAllowAnswerReview(exam.allowAnswerReview);
     // Preserve existing question keys (including legacy B/C/D keys) without silent overwriting
     setQuestions(exam.questions ? JSON.parse(JSON.stringify(exam.questions)) : []);
     setActiveTab('create');
@@ -282,6 +284,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setDurationMinutes(60);
     setStartDate(new Date().toISOString().split('T')[0]);
     setStartTime('08:00');
+    setAllowAnswerReview(undefined);
     setQuestions([createBlankOptionAQuestion(`q-${Date.now()}-1`)]);
   };
 
@@ -403,6 +406,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       endDate: '2026-12-31',
       isPublished: true,
       shuffleQuestions,
+      allowAnswerReview,
       questions: normalizedQuestions,
     };
 
@@ -748,6 +752,22 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                 onChange={(e) => setStartTime(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
               />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Post-Submission Answer Review
+              </label>
+              <select
+                value={allowAnswerReview === false ? 'withhold' : 'inherit'}
+                onChange={(e) =>
+                  setAllowAnswerReview(e.target.value === 'withhold' ? false : undefined)
+                }
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+              >
+                <option value="inherit">Follow School Examination Policy</option>
+                <option value="withhold">Always Withhold Answers &amp; Explanations</option>
+              </select>
             </div>
           </div>
 

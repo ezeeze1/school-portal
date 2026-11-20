@@ -1899,12 +1899,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         1,
         Math.floor((Date.now() - existingSession.startedAtMs) / 1000)
       );
+      const allowAnswerReview =
+        Boolean(systemSettings.cbtAllowAnswerReview) && (localExam.allowAnswerReview ?? true);
       const response = gradeLocalShuffledAttempt(
         localExam,
         studentRecord,
         { ...(existingSession.startResponse.savedAnswers || {}), ...answers },
         existingSession.privateOptionMap,
-        timeTakenSeconds
+        timeTakenSeconds,
+        { allowAnswerReview }
       );
       setCbtAttempts((prev) => [...prev, response.attempt]);
       setCbtExams((prev) =>

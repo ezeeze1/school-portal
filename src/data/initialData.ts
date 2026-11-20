@@ -27,6 +27,7 @@ export const initialSystemSettings: SystemSessionTerm = {
   currentTerm: '2nd Term',
   resultEntryOpen: true,
   cbtActive: true,
+  cbtAllowAnswerReview: false,
 
   // Editable site texts & images defaults
   schoolName: 'DIVINE ACADEMY SECONDARY SCHOOL',

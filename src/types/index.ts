@@ -256,6 +256,7 @@ export interface CBTExam {
   questions: CBTQuestion[];
   isPublished: boolean;
   shuffleQuestions: boolean;
+  allowAnswerReview?: boolean;
   cbtActive?: boolean;
   hasAttempt?: boolean;
   sessionStatus?: 'in_progress' | 'submitted' | 'expired' | null;
@@ -302,6 +303,8 @@ export interface CBTQuestionReview {
 export interface CBTSubmissionResponse {
   attempt: CBTAttempt;
   review: CBTQuestionReview[];
+  reviewPermitted?: boolean;
+  reviewPolicyMessage?: string | null;
 }
 
 export interface CBTAttempt {
@@ -452,6 +455,7 @@ export interface SystemSessionTerm {
   isResultPublished?: boolean;
   resultEntryOpen: boolean;
   cbtActive: boolean;
+  cbtAllowAnswerReview?: boolean;
 
   // Editable site texts & images
   schoolName?: string;

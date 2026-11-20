@@ -1,34 +1,67 @@
 -- ============================================================================
 -- DIVINE ACADEMY SECONDARY SCHOOL PORTAL
--- ADMINISTRATOR-REVIEWED ADDITIVE MIGRATION:
--- AUTOMATIC CBT ANSWER OPTION SHUFFLING (FISHER-YATES) & SESSION PERSISTENCE
+-- ADMINISTRATOR-REVIEWED ADDITIVE MIGRATION (REMEDIATED):
+-- AUTOMATIC CBT ANSWER OPTION SHUFFLING (FISHER-YATES), FAIL-CLOSED GRADING,
+-- SESSION DRAFT PERSISTENCE & SCHOOL REVIEW POLICY ENFORCEMENT
 -- ============================================================================
 -- SAFETY GUARANTEES:
 --   1. Strictly additive and idempotent. Does NOT drop, truncate, or reset any
---      of the 27 existing portal tables.
+--      of the 27 existing portal tables or overwrite unrelated functions.
 --   2. Does NOT modify, disable, or weaken any of the 74 existing RLS policies.
 --   3. Preserves all existing CBT exams, existing questions (including legacy
 --      non-'A' correctOption keys), and all historical cbt_attempts records.
 --   4. Stores per-attempt shuffled option orders & opaque option identifiers
 --      in a locked-down private table (`public.cbt_exam_session_options`) with
---      RLS enabled and ZERO student privileges, preventing pre-submission
---      answer key inspection via Supabase REST or client state.
---   5. Every SECURITY DEFINER function runs with `SET search_path = ''` and
+--      RLS enabled, foreign keys, CHECK constraints, updated_at trigger, and
+--      ZERO student/anon privileges.
+--   5. Fail-closed grading: submit_cbt_exam REQUIRES complete persisted
+--      shuffled-option mappings and rejects raw display-slot ('A'..'D') bypass.
+--   6. Post-submission answer review & explanations are withheld unless both
+--      school policy (`system_settings.cbt_allow_answer_review`) and exam
+--      policy (`cbt_exams.allow_answer_review`) permit release.
+--   7. Every SECURITY DEFINER function runs with `SET search_path = ''` and
 --      explicitly schema-qualified references (`public.`, `auth.`, `pg_catalog.`).
 -- ============================================================================
 
 BEGIN;
 
 -- ----------------------------------------------------------------------------
--- 1. ADDITIVE SESSION DRAFT ANSWERS COLUMN ON public.cbt_exam_sessions
+-- 1. ADDITIVE EXAMINATION REVIEW POLICY COLUMNS (FAIL-CLOSED BY DEFAULT)
+--    system_settings.cbt_allow_answer_review defaults to FALSE so correct
+--    answers & explanations are withheld unless explicitly enabled by admin.
+--    Note: public.public_site_settings view is NOT modified (zero anon leak).
+-- ----------------------------------------------------------------------------
+ALTER TABLE public.system_settings
+  ADD COLUMN IF NOT EXISTS cbt_allow_answer_review boolean NOT NULL DEFAULT false;
+
+-- Nullable per-exam override: NULL = inherit school policy, FALSE = withhold
+ALTER TABLE public.cbt_exams
+  ADD COLUMN IF NOT EXISTS allow_answer_review boolean;
+
+-- ----------------------------------------------------------------------------
+-- 2. ADDITIVE SESSION DRAFT ANSWERS COLUMN ON public.cbt_exam_sessions
 --    Stores ONLY opaque per-session option IDs selected by the student so
 --    page refreshes or temporary network drops preserve selections.
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.cbt_exam_sessions
   ADD COLUMN IF NOT EXISTS draft_answers jsonb NOT NULL DEFAULT '{}'::jsonb;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'public.cbt_exam_sessions'::regclass
+      AND conname = 'chk_cbt_exam_sessions_draft_answers_object'
+  ) THEN
+    ALTER TABLE public.cbt_exam_sessions
+      ADD CONSTRAINT chk_cbt_exam_sessions_draft_answers_object
+      CHECK (pg_catalog.jsonb_typeof(draft_answers) = 'object');
+  END IF;
+END $$;
+
 -- ----------------------------------------------------------------------------
--- 2. PRIVATE PER-ATTEMPT SHUFFLED OPTION MAPPING TABLE
+-- 3. PRIVATE PER-ATTEMPT SHUFFLED OPTION MAPPING TABLE
 --    Stores Fisher-Yates shuffled display slots ('A','B','C','D'), opaque
 --    per-session optionIds, and canonical answer mappings strictly server-side.
 --    Students NEVER have direct SELECT/INSERT/UPDATE/DELETE privileges here.
@@ -42,8 +75,52 @@ CREATE TABLE IF NOT EXISTS public.cbt_exam_session_options (
   shuffled_options jsonb NOT NULL,
   correct_option_id text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+  updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
   CONSTRAINT uq_cbt_session_options_session_question UNIQUE (session_id, question_id)
 );
+
+ALTER TABLE public.cbt_exam_session_options
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT pg_catalog.now();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'public.cbt_exam_session_options'::regclass
+      AND conname = 'fk_cbt_exam_session_options_exam'
+  ) THEN
+    ALTER TABLE public.cbt_exam_session_options
+      ADD CONSTRAINT fk_cbt_exam_session_options_exam
+      FOREIGN KEY (exam_id) REFERENCES public.cbt_exams(id) ON DELETE CASCADE;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'public.cbt_exam_session_options'::regclass
+      AND conname = 'fk_cbt_exam_session_options_student'
+  ) THEN
+    ALTER TABLE public.cbt_exam_session_options
+      ADD CONSTRAINT fk_cbt_exam_session_options_student
+      FOREIGN KEY (student_id) REFERENCES public.students(id) ON DELETE CASCADE;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'public.cbt_exam_session_options'::regclass
+      AND conname = 'chk_cbt_exam_session_options_valid'
+  ) THEN
+    ALTER TABLE public.cbt_exam_session_options
+      ADD CONSTRAINT chk_cbt_exam_session_options_valid
+      CHECK (
+        pg_catalog.jsonb_typeof(shuffled_options) = 'array'
+        AND pg_catalog.jsonb_array_length(shuffled_options) = 4
+        AND pg_catalog.length(pg_catalog.btrim(correct_option_id)) > 0
+      );
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_cbt_exam_session_options_session_id
   ON public.cbt_exam_session_options (session_id);
@@ -51,15 +128,21 @@ CREATE INDEX IF NOT EXISTS idx_cbt_exam_session_options_session_id
 CREATE INDEX IF NOT EXISTS idx_cbt_exam_session_options_exam_student
   ON public.cbt_exam_session_options (exam_id, student_id);
 
+DROP TRIGGER IF EXISTS trg_cbt_exam_session_options_updated_at ON public.cbt_exam_session_options;
+CREATE TRIGGER trg_cbt_exam_session_options_updated_at
+  BEFORE UPDATE ON public.cbt_exam_session_options
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
 ALTER TABLE public.cbt_exam_session_options ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE public.cbt_exam_session_options FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.cbt_exam_session_options TO service_role;
 
 -- ----------------------------------------------------------------------------
--- 3. INTERNAL CSPRNG FISHER-YATES SHUFFLE HELPER FOR 4 OPTIONS (A, B, C, D)
---    Uses pg_catalog.gen_random_uuid() with rejection sampling (zero modulo
---    bias) to perform an unbiased Fisher-Yates permutation on ['A','B','C','D'].
+-- 4. INTERNAL CSPRNG FISHER-YATES SHUFFLE HELPER FOR 4 OPTIONS (A, B, C, D)
+--    Uses 4 random bytes decoded from pg_catalog.gen_random_uuid() (UUIDv4)
+--    via pg_catalog.decode + pg_catalog.get_byte for exact unsigned 32-bit
+--    integers in [0, 4294967295] with rejection sampling (zero modulo bias).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.cbt_fisher_yates_shuffle_keys()
 RETURNS text[]
@@ -72,6 +155,7 @@ DECLARE
   v_slots text[] := ARRAY['A', 'B', 'C', 'D'];
   v_i integer;
   v_j integer;
+  v_rand_bytes bytea;
   v_rand_u32 bigint;
   v_limit bigint;
   v_tmp text;
@@ -79,11 +163,19 @@ BEGIN
   FOR v_i IN REVERSE 4..2 LOOP
     v_limit := 4294967296::bigint - (4294967296::bigint % v_i);
     LOOP
-      v_rand_u32 := ('x' || pg_catalog.substr(
-        pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''),
-        1,
-        8
-      ))::bit(32)::bigint;
+      v_rand_bytes := pg_catalog.decode(
+        pg_catalog.substr(
+          pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''),
+          1,
+          8
+        ),
+        'hex'
+      );
+      v_rand_u32 :=
+        (pg_catalog.get_byte(v_rand_bytes, 0)::bigint * 16777216::bigint) +
+        (pg_catalog.get_byte(v_rand_bytes, 1)::bigint * 65536::bigint) +
+        (pg_catalog.get_byte(v_rand_bytes, 2)::bigint * 256::bigint) +
+         pg_catalog.get_byte(v_rand_bytes, 3)::bigint;
       EXIT WHEN v_rand_u32 < v_limit;
     END LOOP;
 
@@ -103,10 +195,10 @@ REVOKE ALL ON FUNCTION public.cbt_fisher_yates_shuffle_keys() FROM PUBLIC, anon,
 GRANT EXECUTE ON FUNCTION public.cbt_fisher_yates_shuffle_keys() TO service_role;
 
 -- ----------------------------------------------------------------------------
--- 4. INTERNAL HELPER: GENERATE & PERSIST SHUFFLED OPTIONS ONCE PER SESSION
---    If rows already exist for (session_id, question_id), they are NEVER
---    regenerated so option order stays identical on navigation, refresh,
---    and session resume.
+-- 5. INTERNAL HELPER: GENERATE & PERSIST SHUFFLED OPTIONS ONCE PER SESSION
+--    Validates active session ownership before inserting. If rows already
+--    exist for (session_id, question_id), they are NEVER regenerated so option
+--    order stays identical on navigation, refresh, and session resume.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.cbt_ensure_session_shuffled_options(
   p_session_id text,
@@ -131,7 +223,19 @@ DECLARE
   v_shuffled_arr jsonb;
   v_correct_opt_id text;
   v_exam_questions jsonb;
+  v_mapped_total integer := 0;
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.cbt_exam_sessions ces
+    WHERE ces.id = p_session_id
+      AND ces.exam_id = p_exam_id
+      AND ces.student_id = p_student_id
+      AND ces.status = 'in_progress'
+  ) THEN
+    RAISE EXCEPTION 'Target CBT exam session is missing or no longer in progress.';
+  END IF;
+
   IF EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = p_exam_id) THEN
     FOR v_q IN
       SELECT
@@ -141,8 +245,8 @@ BEGIN
         cq.option_c,
         cq.option_d,
         CASE
-          WHEN pg_catalog.upper(COALESCE(cq.correct_option, 'A')) IN ('A', 'B', 'C', 'D')
-            THEN pg_catalog.upper(cq.correct_option)
+          WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(cq.correct_option, 'A'))) IN ('A', 'B', 'C', 'D')
+            THEN pg_catalog.upper(pg_catalog.btrim(cq.correct_option))
           ELSE 'A'
         END AS true_correct
       FROM public.cbt_questions cq
@@ -188,6 +292,10 @@ BEGIN
         );
       END LOOP;
 
+      IF pg_catalog.length(v_correct_opt_id) = 0 THEN
+        RAISE EXCEPTION 'Unable to resolve shuffled correct option mapping for question %.', v_q.qid;
+      END IF;
+
       INSERT INTO public.cbt_exam_session_options (
         id, session_id, exam_id, student_id, question_id, shuffled_options, correct_option_id
       )
@@ -216,8 +324,8 @@ BEGIN
         COALESCE(q.val->'options'->>'C', '') AS option_c,
         COALESCE(q.val->'options'->>'D', '') AS option_d,
         CASE
-          WHEN pg_catalog.upper(COALESCE(q.val->>'correctOption', 'A')) IN ('A', 'B', 'C', 'D')
-            THEN pg_catalog.upper(q.val->>'correctOption')
+          WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(q.val->>'correctOption', 'A'))) IN ('A', 'B', 'C', 'D')
+            THEN pg_catalog.upper(pg_catalog.btrim(COALESCE(q.val->>'correctOption', 'A')))
           ELSE 'A'
         END AS true_correct
       FROM pg_catalog.jsonb_array_elements(
@@ -263,6 +371,10 @@ BEGIN
         );
       END LOOP;
 
+      IF pg_catalog.length(v_correct_opt_id) = 0 THEN
+        RAISE EXCEPTION 'Unable to resolve shuffled correct option mapping for question %.', v_q.qid;
+      END IF;
+
       INSERT INTO public.cbt_exam_session_options (
         id, session_id, exam_id, student_id, question_id, shuffled_options, correct_option_id
       )
@@ -278,6 +390,16 @@ BEGIN
       ON CONFLICT (session_id, question_id) DO NOTHING;
     END LOOP;
   END IF;
+
+  SELECT pg_catalog.count(*)::integer INTO v_mapped_total
+  FROM public.cbt_exam_session_options ceo
+  WHERE ceo.session_id = p_session_id
+    AND ceo.exam_id = p_exam_id
+    AND ceo.student_id = p_student_id;
+
+  IF v_mapped_total <= 0 THEN
+    RAISE EXCEPTION 'This CBT examination currently has no questions configured.';
+  END IF;
 END;
 $$;
 
@@ -285,7 +407,7 @@ REVOKE ALL ON FUNCTION public.cbt_ensure_session_shuffled_options(text, text, te
 GRANT EXECUTE ON FUNCTION public.cbt_ensure_session_shuffled_options(text, text, text) TO service_role;
 
 -- ----------------------------------------------------------------------------
--- 5. UPDATED start_cbt_exam(p_exam_id text)
+-- 6. UPDATED start_cbt_exam(p_exam_id text)
 --    Applies Fisher-Yates option shuffling independently per student attempt,
 --    persists opaque option IDs, returns ONLY display text + opaque optionIds
 --    (ZERO correctOption, canonicalKey, isCorrect, or explanation), and
@@ -323,7 +445,10 @@ BEGIN
     RAISE EXCEPTION 'Only enrolled students can start a CBT examination.';
   END IF;
 
-  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('cbt:' || p_exam_id || ':' || v_student.id));
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtext('cbt_exam_session'),
+    pg_catalog.hashtext(p_exam_id || ':' || v_student.id)
+  );
 
   IF v_student.status <> 'Active' THEN
     RAISE EXCEPTION 'Your student account status (%) is not eligible for CBT examinations.', v_student.status;
@@ -353,6 +478,10 @@ BEGIN
 
   IF v_exam.class_id <> v_student.class_id THEN
     RAISE EXCEPTION 'You are not enrolled in the target class for this CBT examination.';
+  END IF;
+
+  IF COALESCE(v_exam.duration_minutes, 0) <= 0 THEN
+    RAISE EXCEPTION 'This CBT examination has an invalid duration configuration.';
   END IF;
 
   IF EXISTS (
@@ -420,6 +549,10 @@ BEGIN
       ) sub;
     END IF;
 
+    IF pg_catalog.jsonb_typeof(v_order) <> 'array' OR pg_catalog.jsonb_array_length(v_order) = 0 THEN
+      RAISE EXCEPTION 'This CBT examination currently contains no questions.';
+    END IF;
+
     INSERT INTO public.cbt_exam_sessions (
       id, exam_id, student_id, started_at, expires_at, status, question_order, draft_answers
     )
@@ -464,7 +597,10 @@ BEGIN
     INTO v_questions
     FROM public.cbt_questions cq
     JOIN public.cbt_exam_session_options ceo
-      ON ceo.session_id = v_session.id AND ceo.question_id = cq.id
+      ON ceo.session_id = v_session.id
+     AND ceo.exam_id = p_exam_id
+     AND ceo.student_id = v_student.id
+     AND ceo.question_id = cq.id
     LEFT JOIN LATERAL pg_catalog.jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
       ON ord_idx.qid = cq.id
     WHERE cq.exam_id = p_exam_id;
@@ -494,9 +630,15 @@ BEGIN
     ) WITH ORDINALITY AS q(val, ord)
     JOIN public.cbt_exam_session_options ceo
       ON ceo.session_id = v_session.id
+     AND ceo.exam_id = p_exam_id
+     AND ceo.student_id = v_student.id
      AND ceo.question_id = COALESCE(NULLIF(pg_catalog.btrim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text)
     LEFT JOIN LATERAL pg_catalog.jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
       ON ord_idx.qid = COALESCE(NULLIF(pg_catalog.btrim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text);
+  END IF;
+
+  IF pg_catalog.jsonb_typeof(v_questions) <> 'array' OR pg_catalog.jsonb_array_length(v_questions) = 0 THEN
+    RAISE EXCEPTION 'Unable to prepare examination questions for this session.';
   END IF;
 
   v_remaining := GREATEST(0, pg_catalog.floor(EXTRACT(EPOCH FROM (v_session.expires_at - v_now)))::integer);
@@ -532,9 +674,11 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 6. NEW RPC: save_cbt_exam_answers(p_exam_id text, p_answers jsonb)
+-- 7. NEW RPC: save_cbt_exam_answers(p_exam_id text, p_answers jsonb)
 --    Persists the student's selected opaque optionIds incrementally on the
---    server while the session is in progress. Never reveals answer keys.
+--    server while the session is in progress. Strictly rejects raw display-slot
+--    strings ('A'..'D'), expired sessions, inactive students, or already
+--    submitted exams. Never reveals answer keys.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.save_cbt_exam_answers(
   p_exam_id text,
@@ -547,7 +691,9 @@ SET search_path = ''
 AS $$
 DECLARE
   v_student public.students%ROWTYPE;
+  v_exam public.cbt_exams%ROWTYPE;
   v_session public.cbt_exam_sessions%ROWTYPE;
+  v_cbt_active boolean := true;
   v_incoming jsonb := CASE WHEN pg_catalog.jsonb_typeof(p_answers) = 'object' THEN p_answers ELSE '{}'::jsonb END;
   v_sanitized jsonb := '{}'::jsonb;
   v_merged jsonb := '{}'::jsonb;
@@ -566,7 +712,39 @@ BEGIN
     RAISE EXCEPTION 'Only enrolled students can save CBT answers.';
   END IF;
 
-  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('cbt:' || p_exam_id || ':' || v_student.id));
+  IF v_student.status <> 'Active' THEN
+    RAISE EXCEPTION 'Your student account status (%) is not eligible for CBT examinations.', v_student.status;
+  END IF;
+
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtext('cbt_exam_session'),
+    pg_catalog.hashtext(p_exam_id || ':' || v_student.id)
+  );
+
+  SELECT COALESCE(ss.cbt_active, true) INTO v_cbt_active
+  FROM public.system_settings ss
+  WHERE ss.id = 'default'
+  LIMIT 1;
+
+  IF NOT v_cbt_active THEN
+    RAISE EXCEPTION 'CBT examinations are currently disabled by the school administrator.';
+  END IF;
+
+  SELECT * INTO v_exam
+  FROM public.cbt_exams ce
+  WHERE ce.id = p_exam_id
+  LIMIT 1;
+
+  IF NOT FOUND OR NOT v_exam.is_published OR v_exam.class_id <> v_student.class_id THEN
+    RAISE EXCEPTION 'You are not authorized to save answers for this CBT examination.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.cbt_attempts ca
+    WHERE ca.exam_id = p_exam_id AND ca.student_id = v_student.id
+  ) THEN
+    RAISE EXCEPTION 'This CBT examination has already been completed.';
+  END IF;
 
   SELECT * INTO v_session
   FROM public.cbt_exam_sessions ces
@@ -577,22 +755,23 @@ BEGIN
     RAISE EXCEPTION 'No active CBT exam session found.';
   END IF;
 
-  IF v_now > v_session.expires_at + interval '20 seconds' THEN
+  IF v_now > v_session.expires_at THEN
     RAISE EXCEPTION 'CBT exam session time has expired.';
   END IF;
 
-  -- Validate every submitted answer against this session's persisted opaque optionIds
+  -- Strictly validate every submitted answer against persisted opaque optionIds ONLY
   SELECT COALESCE(pg_catalog.jsonb_object_agg(kv.key, resolved.option_id), '{}'::jsonb)
   INTO v_sanitized
   FROM pg_catalog.jsonb_each_text(v_incoming) AS kv(key, val)
   JOIN public.cbt_exam_session_options ceo
     ON ceo.session_id = v_session.id
+   AND ceo.exam_id = p_exam_id
+   AND ceo.student_id = v_student.id
    AND ceo.question_id = kv.key
   CROSS JOIN LATERAL (
     SELECT opt->>'optionId' AS option_id
     FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
     WHERE opt->>'optionId' = pg_catalog.btrim(kv.val)
-       OR opt->>'slot' = pg_catalog.upper(pg_catalog.btrim(kv.val))
     LIMIT 1
   ) AS resolved
   WHERE resolved.option_id IS NOT NULL;
@@ -612,13 +791,15 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 7. UPDATED submit_cbt_exam(p_exam_id text, p_answers jsonb)
---    Server-authoritative grading using opaque optionIds resolved against
---    cbt_exam_session_options and true correct_option in cbt_questions
---    (handling both Option-A questions and legacy non-'A' questions).
---    Stores canonical answers ('A'|'B'|'C'|'D') in cbt_attempts.answers for
---    teacher script compatibility, and returns post-submission review with the
---    exact shuffled option layout the student saw on screen.
+-- 8. UPDATED submit_cbt_exam(p_exam_id text, p_answers jsonb)
+--    Server-authoritative, FAIL-CLOSED grading:
+--      - Requires valid, complete cbt_exam_session_options rows for EVERY
+--        question in the exam (no unmapped fallback, no raw slot bypass).
+--      - Resolves opaque optionIds against true correct_option (supporting
+--        both Option-A questions and legacy 'B'|'C'|'D' answer keys).
+--      - Stores canonical answers ('A'|'B'|'C'|'D') in cbt_attempts.answers.
+--      - Withholds correct answers & explanations unless school & exam review
+--        policies both permit post-submission review.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.submit_cbt_exam(
   p_exam_id text,
@@ -636,6 +817,11 @@ DECLARE
   v_incoming jsonb := CASE WHEN pg_catalog.jsonb_typeof(p_answers) = 'object' THEN p_answers ELSE '{}'::jsonb END;
   v_effective_answers jsonb := '{}'::jsonb;
   v_canonical_answers jsonb := '{}'::jsonb;
+  v_expected_count integer := 0;
+  v_mapped_count integer := 0;
+  v_missing_correct_slot integer := 0;
+  v_school_allow_review boolean := false;
+  v_review_permitted boolean := false;
   v_score numeric(6,2) := 0;
   v_total_marks numeric(6,2) := 0;
   v_percentage numeric(5,2) := 0;
@@ -660,7 +846,14 @@ BEGIN
     RAISE EXCEPTION 'Only enrolled students can submit CBT examinations.';
   END IF;
 
-  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('cbt:' || p_exam_id || ':' || v_student.id));
+  IF v_student.status <> 'Active' THEN
+    RAISE EXCEPTION 'Your student account status (%) is not eligible to submit CBT examinations.', v_student.status;
+  END IF;
+
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtext('cbt_exam_session'),
+    pg_catalog.hashtext(p_exam_id || ':' || v_student.id)
+  );
 
   SELECT * INTO v_exam
   FROM public.cbt_exams ce
@@ -698,10 +891,20 @@ BEGIN
     RAISE EXCEPTION 'Exam submission window has expired.';
   END IF;
 
+  -- Determine examination review policy (fail-closed by default; requires school policy = true)
+  SELECT COALESCE(ss.cbt_allow_answer_review, false)
+  INTO v_school_allow_review
+  FROM public.system_settings ss
+  WHERE ss.id = 'default'
+  LIMIT 1;
+
+  v_review_permitted := COALESCE(v_school_allow_review, false)
+    AND COALESCE(v_exam.allow_answer_review, true);
+
   v_time_taken := GREATEST(
     1,
     LEAST(
-      v_exam.duration_minutes * 60,
+      GREATEST(v_exam.duration_minutes, 1) * 60,
       pg_catalog.floor(EXTRACT(EPOCH FROM (v_now - v_session.started_at)))::integer
     )
   );
@@ -710,77 +913,78 @@ BEGIN
   v_effective_answers := COALESCE(v_session.draft_answers, '{}'::jsonb) || v_incoming;
 
   IF EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = p_exam_id) THEN
+    -- Fail-closed check: every question must have a valid 4-option session mapping
+    SELECT pg_catalog.count(*)::integer
+    INTO v_expected_count
+    FROM public.cbt_questions cq
+    WHERE cq.exam_id = p_exam_id;
+
+    SELECT pg_catalog.count(*)::integer
+    INTO v_mapped_count
+    FROM public.cbt_questions cq
+    JOIN public.cbt_exam_session_options ceo
+      ON ceo.session_id = v_session.id
+     AND ceo.exam_id = p_exam_id
+     AND ceo.student_id = v_student.id
+     AND ceo.question_id = cq.id
+    WHERE cq.exam_id = p_exam_id
+      AND pg_catalog.jsonb_typeof(ceo.shuffled_options) = 'array'
+      AND pg_catalog.jsonb_array_length(ceo.shuffled_options) = 4;
+
+    IF v_expected_count = 0 OR v_mapped_count <> v_expected_count THEN
+      RAISE EXCEPTION 'Session option mapping is missing or incomplete for this examination. Please reload the examination before submitting.';
+    END IF;
+
     WITH ordered_q AS (
       SELECT
         cq.id,
         cq.question,
+        (
+          SELECT pg_catalog.jsonb_object_agg(opt->>'slot', opt->>'text')
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+        ) AS display_options,
         CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT pg_catalog.jsonb_object_agg(opt->>'slot', opt->>'text')
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-          )
-          ELSE pg_catalog.jsonb_build_object('A', cq.option_a, 'B', cq.option_b, 'C', cq.option_c, 'D', cq.option_d)
-        END AS display_options,
-        CASE
-          WHEN pg_catalog.upper(COALESCE(cq.correct_option, 'A')) IN ('A', 'B', 'C', 'D')
-            THEN pg_catalog.upper(cq.correct_option)
+          WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(cq.correct_option, 'A'))) IN ('A', 'B', 'C', 'D')
+            THEN pg_catalog.upper(pg_catalog.btrim(cq.correct_option))
           ELSE 'A'
         END AS true_correct_canonical,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN COALESCE(
-            (
-              SELECT opt->>'slot'
-              FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-              WHERE opt->>'canonicalKey' = CASE
-                WHEN pg_catalog.upper(COALESCE(cq.correct_option, 'A')) IN ('A', 'B', 'C', 'D')
-                  THEN pg_catalog.upper(cq.correct_option)
-                ELSE 'A'
-              END
-              LIMIT 1
-            ),
-            'A'
-          )
-          ELSE CASE
-            WHEN pg_catalog.upper(COALESCE(cq.correct_option, 'A')) IN ('A', 'B', 'C', 'D')
-              THEN pg_catalog.upper(cq.correct_option)
+        (
+          SELECT opt->>'slot'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'canonicalKey' = CASE
+            WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(cq.correct_option, 'A'))) IN ('A', 'B', 'C', 'D')
+              THEN pg_catalog.upper(pg_catalog.btrim(cq.correct_option))
             ELSE 'A'
           END
-        END AS correct_display_slot,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT opt->>'slot'
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-            WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))
-               OR opt->>'slot' = pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, '')))
-            LIMIT 1
-          )
-          ELSE NULLIF(pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))), '')
-        END AS selected_display_slot,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT opt->>'canonicalKey'
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-            WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))
-               OR opt->>'slot' = pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, '')))
-            LIMIT 1
-          )
-          ELSE CASE
-            WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))) IN ('A', 'B', 'C', 'D')
-              THEN pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, '')))
-            ELSE NULL
-          END
-        END AS selected_canonical,
+          LIMIT 1
+        ) AS correct_display_slot,
+        (
+          SELECT opt->>'slot'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))
+          LIMIT 1
+        ) AS selected_display_slot,
+        (
+          SELECT opt->>'canonicalKey'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>cq.id, ''))
+          LIMIT 1
+        ) AS selected_canonical,
         cq.explanation,
         cq.marks,
         COALESCE(ord_idx.pos, cq.question_order::bigint) AS sort_pos
       FROM public.cbt_questions cq
-      LEFT JOIN public.cbt_exam_session_options ceo
-        ON ceo.session_id = v_session.id AND ceo.question_id = cq.id
+      INNER JOIN public.cbt_exam_session_options ceo
+        ON ceo.session_id = v_session.id
+       AND ceo.exam_id = p_exam_id
+       AND ceo.student_id = v_student.id
+       AND ceo.question_id = cq.id
       LEFT JOIN LATERAL pg_catalog.jsonb_array_elements_text(v_session.question_order) WITH ORDINALITY AS ord_idx(qid, pos)
         ON ord_idx.qid = cq.id
       WHERE cq.exam_id = p_exam_id
     )
     SELECT
+      pg_catalog.count(*) FILTER (WHERE correct_display_slot IS NULL)::integer,
       COALESCE(pg_catalog.sum(CASE WHEN selected_canonical = true_correct_canonical THEN marks ELSE 0 END), 0),
       COALESCE(pg_catalog.sum(marks), 0),
       COALESCE(
@@ -804,17 +1008,44 @@ BEGIN
         ),
         '[]'::jsonb
       )
-    INTO v_score, v_total_marks, v_canonical_answers, v_review
+    INTO v_missing_correct_slot, v_score, v_total_marks, v_canonical_answers, v_review
     FROM ordered_q;
+
+    IF v_missing_correct_slot > 0 THEN
+      RAISE EXCEPTION 'Session option mapping integrity check failed during grading.';
+    END IF;
   ELSE
+    -- JSONB exam fallback (pre-sync legacy structure); still strictly REQUIRES cbt_exam_session_options
+    SELECT pg_catalog.count(*)::integer
+    INTO v_expected_count
+    FROM pg_catalog.jsonb_array_elements(
+      CASE WHEN pg_catalog.jsonb_typeof(v_exam.questions) = 'array' THEN v_exam.questions ELSE '[]'::jsonb END
+    ) WITH ORDINALITY AS q(val, ord);
+
+    SELECT pg_catalog.count(*)::integer
+    INTO v_mapped_count
+    FROM pg_catalog.jsonb_array_elements(
+      CASE WHEN pg_catalog.jsonb_typeof(v_exam.questions) = 'array' THEN v_exam.questions ELSE '[]'::jsonb END
+    ) WITH ORDINALITY AS q(val, ord)
+    JOIN public.cbt_exam_session_options ceo
+      ON ceo.session_id = v_session.id
+     AND ceo.exam_id = p_exam_id
+     AND ceo.student_id = v_student.id
+     AND ceo.question_id = COALESCE(NULLIF(pg_catalog.btrim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text)
+    WHERE pg_catalog.jsonb_typeof(ceo.shuffled_options) = 'array'
+      AND pg_catalog.jsonb_array_length(ceo.shuffled_options) = 4;
+
+    IF v_expected_count = 0 OR v_mapped_count <> v_expected_count THEN
+      RAISE EXCEPTION 'Session option mapping is missing or incomplete for this examination. Please reload the examination before submitting.';
+    END IF;
+
     WITH base_q AS (
       SELECT
         COALESCE(NULLIF(pg_catalog.btrim(q.val->>'id'), ''), p_exam_id || '-q-' || q.ord::text) AS id,
         COALESCE(q.val->>'question', '') AS question,
-        COALESCE(q.val->'options', '{}'::jsonb) AS raw_options,
         CASE
-          WHEN pg_catalog.upper(COALESCE(q.val->>'correctOption', 'A')) IN ('A','B','C','D')
-            THEN pg_catalog.upper(q.val->>'correctOption')
+          WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(q.val->>'correctOption', 'A'))) IN ('A','B','C','D')
+            THEN pg_catalog.upper(pg_catalog.btrim(COALESCE(q.val->>'correctOption', 'A')))
           ELSE 'A'
         END AS true_correct_canonical,
         q.val->>'explanation' AS explanation,
@@ -830,58 +1061,41 @@ BEGIN
       SELECT
         bq.id,
         bq.question,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT pg_catalog.jsonb_object_agg(opt->>'slot', opt->>'text')
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-          )
-          ELSE bq.raw_options
-        END AS display_options,
+        (
+          SELECT pg_catalog.jsonb_object_agg(opt->>'slot', opt->>'text')
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+        ) AS display_options,
         bq.true_correct_canonical,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN COALESCE(
-            (
-              SELECT opt->>'slot'
-              FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-              WHERE opt->>'canonicalKey' = bq.true_correct_canonical
-              LIMIT 1
-            ),
-            'A'
-          )
-          ELSE bq.true_correct_canonical
-        END AS correct_display_slot,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT opt->>'slot'
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-            WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))
-               OR opt->>'slot' = pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, '')))
-            LIMIT 1
-          )
-          ELSE NULLIF(pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))), '')
-        END AS selected_display_slot,
-        CASE
-          WHEN ceo.id IS NOT NULL THEN (
-            SELECT opt->>'canonicalKey'
-            FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
-            WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))
-               OR opt->>'slot' = pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, '')))
-            LIMIT 1
-          )
-          ELSE CASE
-            WHEN pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))) IN ('A', 'B', 'C', 'D')
-              THEN pg_catalog.upper(pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, '')))
-            ELSE NULL
-          END
-        END AS selected_canonical,
+        (
+          SELECT opt->>'slot'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'canonicalKey' = bq.true_correct_canonical
+          LIMIT 1
+        ) AS correct_display_slot,
+        (
+          SELECT opt->>'slot'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))
+          LIMIT 1
+        ) AS selected_display_slot,
+        (
+          SELECT opt->>'canonicalKey'
+          FROM pg_catalog.jsonb_array_elements(ceo.shuffled_options) AS opt
+          WHERE opt->>'optionId' = pg_catalog.btrim(COALESCE(v_effective_answers->>bq.id, ''))
+          LIMIT 1
+        ) AS selected_canonical,
         bq.explanation,
         bq.marks,
         bq.sort_pos
       FROM base_q bq
-      LEFT JOIN public.cbt_exam_session_options ceo
-        ON ceo.session_id = v_session.id AND ceo.question_id = bq.id
+      INNER JOIN public.cbt_exam_session_options ceo
+        ON ceo.session_id = v_session.id
+       AND ceo.exam_id = p_exam_id
+       AND ceo.student_id = v_student.id
+       AND ceo.question_id = bq.id
     )
     SELECT
+      pg_catalog.count(*) FILTER (WHERE correct_display_slot IS NULL)::integer,
       COALESCE(pg_catalog.sum(CASE WHEN selected_canonical = true_correct_canonical THEN marks ELSE 0 END), 0),
       COALESCE(pg_catalog.sum(marks), 0),
       COALESCE(
@@ -905,8 +1119,12 @@ BEGIN
         ),
         '[]'::jsonb
       )
-    INTO v_score, v_total_marks, v_canonical_answers, v_review
+    INTO v_missing_correct_slot, v_score, v_total_marks, v_canonical_answers, v_review
     FROM ordered_q;
+
+    IF v_missing_correct_slot > 0 THEN
+      RAISE EXCEPTION 'Session option mapping integrity check failed during grading.';
+    END IF;
   END IF;
 
   IF v_total_marks <= 0 THEN
@@ -915,7 +1133,11 @@ BEGIN
 
   v_percentage := LEAST(100, GREATEST(0, pg_catalog.round((v_score / v_total_marks) * 100.0, 2)));
   v_passed := v_percentage >= COALESCE(v_exam.pass_percentage, 50);
-  v_attempt_id := 'attmpt-' || pg_catalog.substr(pg_catalog.md5(p_exam_id || ':' || v_student.id || ':' || v_now::text), 1, 16);
+  v_attempt_id := 'attmpt-' || pg_catalog.substr(
+    pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''),
+    1,
+    16
+  );
 
   INSERT INTO public.cbt_attempts (
     id, exam_id, student_id, student_name, admission_no,
@@ -944,6 +1166,11 @@ BEGIN
       updated_at = v_now
   WHERE id = v_session.id;
 
+  -- Enforce review policy: withhold correct answers & explanations when disallowed
+  IF NOT v_review_permitted THEN
+    v_review := '[]'::jsonb;
+  END IF;
+
   RETURN pg_catalog.jsonb_build_object(
     'attempt', pg_catalog.jsonb_build_object(
       'id', v_attempt_row.id,
@@ -959,13 +1186,18 @@ BEGIN
       'completedAt', v_attempt_row.completed_at,
       'answers', v_attempt_row.answers
     ),
-    'review', v_review
+    'review', v_review,
+    'reviewPermitted', v_review_permitted,
+    'reviewPolicyMessage', CASE
+      WHEN v_review_permitted THEN NULL
+      ELSE 'Correct answers and explanations are withheld in accordance with the school examination review policy.'
+    END
   );
 END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 8. TEACHER/ADMIN HELPER: CHECK EXAMS WITH ACTIVE IN-PROGRESS SESSIONS
+-- 9. TEACHER/ADMIN HELPER: CHECK EXAMS WITH ACTIVE IN-PROGRESS SESSIONS
 --    Lets the Exam Builder show which exams are locked for editing while
 --    students are actively taking the exam.
 -- ----------------------------------------------------------------------------
@@ -998,7 +1230,7 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 9. LEAST-PRIVILEGE RPC EXECUTION GRANTS
+-- 10. LEAST-PRIVILEGE RPC EXECUTION GRANTS
 -- ----------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION public.start_cbt_exam(text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.save_cbt_exam_answers(text, jsonb) FROM PUBLIC, anon;

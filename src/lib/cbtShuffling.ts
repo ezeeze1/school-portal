@@ -259,8 +259,10 @@ export function gradeLocalShuffledAttempt(
   student: Pick<Student, 'id' | 'firstName' | 'lastName' | 'admissionNo'>,
   submittedAnswers: Record<string, string>,
   privateOptionMap: Record<string, LocalSessionOptionMap>,
-  timeTakenSeconds: number
+  timeTakenSeconds: number,
+  options?: { allowAnswerReview?: boolean }
 ): CBTSubmissionResponse {
+  const reviewPermitted = Boolean(options?.allowAnswerReview);
   let scoreObtained = 0;
   let totalMarks = 0;
   const canonicalAnswers: Record<string, OptionSlot> = {};
@@ -271,44 +273,39 @@ export function gradeLocalShuffledAttempt(
     totalMarks += marks;
 
     const mapEntry = privateOptionMap[q.id];
-    const rawSelection = submittedAnswers?.[q.id] ?? '';
+    if (!mapEntry || !Array.isArray(mapEntry.shuffledOptions) || mapEntry.shuffledOptions.length !== 4) {
+      throw new Error(
+        `Session option mapping is missing or incomplete for question ${q.id}. Please reload the examination before submitting.`
+      );
+    }
+
+    const rawSelection = (submittedAnswers?.[q.id] ?? '').trim();
     const trueCorrectKey: OptionSlot =
       q.correctOption && OPTION_SLOTS.includes(q.correctOption) ? q.correctOption : 'A';
 
     let selectedDisplaySlot: OptionSlot | null = null;
     let selectedCanonical: OptionSlot | null = null;
-    let correctDisplaySlot: OptionSlot = trueCorrectKey;
+    let correctDisplaySlot: OptionSlot | null = null;
     const displayOptions: { A: string; B: string; C: string; D: string } = {
-      A: q.options.A,
-      B: q.options.B,
-      C: q.options.C,
-      D: q.options.D,
+      A: '',
+      B: '',
+      C: '',
+      D: '',
     };
 
-    if (mapEntry) {
-      for (const item of mapEntry.shuffledOptions) {
-        displayOptions[item.slot] = item.text;
-        if (item.canonicalKey === trueCorrectKey) {
-          correctDisplaySlot = item.slot;
-        }
-        if (rawSelection && item.optionId === rawSelection) {
-          selectedDisplaySlot = item.slot;
-          selectedCanonical = item.canonicalKey;
-        }
+    for (const item of mapEntry.shuffledOptions) {
+      displayOptions[item.slot] = item.text;
+      if (item.canonicalKey === trueCorrectKey) {
+        correctDisplaySlot = item.slot;
       }
-      // Fallback if display slot key was passed instead of opaque optionId
-      if (!selectedDisplaySlot && OPTION_SLOTS.includes(rawSelection.toUpperCase() as OptionSlot)) {
-        const slotMatch = mapEntry.shuffledOptions.find(
-          (item) => item.slot === (rawSelection.toUpperCase() as OptionSlot)
-        );
-        if (slotMatch) {
-          selectedDisplaySlot = slotMatch.slot;
-          selectedCanonical = slotMatch.canonicalKey;
-        }
+      if (rawSelection && item.optionId === rawSelection) {
+        selectedDisplaySlot = item.slot;
+        selectedCanonical = item.canonicalKey;
       }
-    } else if (OPTION_SLOTS.includes(rawSelection.toUpperCase() as OptionSlot)) {
-      selectedDisplaySlot = rawSelection.toUpperCase() as OptionSlot;
-      selectedCanonical = selectedDisplaySlot;
+    }
+
+    if (!correctDisplaySlot) {
+      throw new Error(`Session option mapping integrity check failed for question ${q.id}.`);
     }
 
     if (selectedCanonical) {
@@ -319,17 +316,19 @@ export function gradeLocalShuffledAttempt(
     const earnedMarks = isCorrect ? marks : 0;
     scoreObtained += earnedMarks;
 
-    review.push({
-      questionId: q.id,
-      question: q.question,
-      options: displayOptions,
-      selectedOption: selectedDisplaySlot,
-      correctOption: correctDisplaySlot,
-      explanation: q.explanation,
-      marks,
-      earnedMarks,
-      isCorrect,
-    });
+    if (reviewPermitted) {
+      review.push({
+        questionId: q.id,
+        question: q.question,
+        options: displayOptions,
+        selectedOption: selectedDisplaySlot,
+        correctOption: correctDisplaySlot,
+        explanation: q.explanation,
+        marks,
+        earnedMarks,
+        isCorrect,
+      });
+    }
   }
 
   const safeTotalMarks = totalMarks > 0 ? totalMarks : Math.max(exam.totalMarks || 1, 1);
@@ -352,5 +351,9 @@ export function gradeLocalShuffledAttempt(
       answers: canonicalAnswers,
     },
     review,
+    reviewPermitted,
+    reviewPolicyMessage: reviewPermitted
+      ? null
+      : 'Correct answers and explanations are withheld in accordance with the school examination review policy.',
   };
 }

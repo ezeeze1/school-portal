@@ -83,6 +83,7 @@ const toSystemSettingsRow = (s: SystemSessionTerm) => ({
   is_result_published: s.isResultPublished ?? false,
   result_entry_open: s.resultEntryOpen,
   cbt_active: s.cbtActive,
+  cbt_allow_answer_review: s.cbtAllowAnswerReview ?? false,
   school_name: s.schoolName ?? null,
   school_motto: s.schoolMotto ?? null,
   school_logo_text: s.schoolLogoText ?? null,
@@ -119,6 +120,7 @@ const fromSystemSettingsRow = (r: Record<string, any>): SystemSessionTerm => ({
   isResultPublished: r.is_result_published ?? undefined,
   resultEntryOpen: Boolean(r.result_entry_open ?? false),
   cbtActive: Boolean(r.cbt_active ?? true),
+  cbtAllowAnswerReview: Boolean(r.cbt_allow_answer_review ?? false),
   schoolName: r.school_name ?? undefined,
   schoolMotto: r.school_motto ?? undefined,
   schoolLogoText: r.school_logo_text ?? undefined,
@@ -414,6 +416,7 @@ const toCBTExamRow = (e: CBTExam) => ({
   questions: e.questions ?? [],
   is_published: e.isPublished,
   shuffle_questions: e.shuffleQuestions,
+  allow_answer_review: e.allowAnswerReview ?? null,
 });
 
 const fromCBTExamRow = (r: Record<string, any>): CBTExam => ({
@@ -436,6 +439,8 @@ const fromCBTExamRow = (r: Record<string, any>): CBTExam => ({
   questions: Array.isArray(r.questions) ? r.questions : [],
   isPublished: Boolean(r.is_published),
   shuffleQuestions: Boolean(r.shuffle_questions),
+  allowAnswerReview:
+    typeof r.allow_answer_review === 'boolean' ? r.allow_answer_review : undefined,
 });
 
 const toCBTAttemptRow = (a: CBTAttempt) => ({

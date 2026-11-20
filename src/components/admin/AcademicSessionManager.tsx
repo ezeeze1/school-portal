@@ -24,6 +24,9 @@ export const AcademicSessionManager: React.FC = () => {
   const [session, setSession] = useState(systemSettings.currentSession);
   const [term, setTerm] = useState(systemSettings.currentTerm);
   const [isResultPublished, setIsResultPublished] = useState(systemSettings.isResultPublished);
+  const [cbtAllowAnswerReview, setCbtAllowAnswerReview] = useState(
+    Boolean(systemSettings.cbtAllowAnswerReview)
+  );
   const [saved, setSaved] = useState(false);
 
   // Add New Academic Session State
@@ -133,6 +136,7 @@ export const AcademicSessionManager: React.FC = () => {
       currentSession: session,
       currentTerm: term as any,
       isResultPublished,
+      cbtAllowAnswerReview,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -442,6 +446,30 @@ export const AcademicSessionManager: React.FC = () => {
                 >
                   {isResultPublished ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                   {isResultPublished ? 'Results Published' : 'Results Locked'}
+                </button>
+              </div>
+
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-bold text-slate-900 dark:text-white">
+                    Release CBT Answer Keys &amp; Explanations After Submission
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    When locked (recommended during active exam windows), students receive only their official score after submission and cannot inspect answer keys or explanations.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setCbtAllowAnswerReview(!cbtAllowAnswerReview)}
+                  className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors flex-shrink-0 ${
+                    cbtAllowAnswerReview
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-300 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  {cbtAllowAnswerReview ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                  {cbtAllowAnswerReview ? 'Review Permitted' : 'Answers Withheld'}
                 </button>
               </div>
 

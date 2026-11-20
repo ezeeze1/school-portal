@@ -172,7 +172,8 @@ function runTests() {
     const slotFor4 = OPTION_SLOTS.find((s) => q1.options[s] === '4')!;
     const wrongSlotQ2 = OPTION_SLOTS.find((s) => q2.options[s] === '12')!;
 
-    const res = gradeLocalShuffledAttempt(
+    // Default fail-closed review policy omits answer keys & explanations
+    const resLocked = gradeLocalShuffledAttempt(
       exam,
       student,
       {
@@ -183,19 +184,55 @@ function runTests() {
       120
     );
 
-    assert.equal(res.attempt.scoreObtained, 2);
-    assert.equal(res.attempt.totalMarks, 5);
-    assert.equal(res.attempt.percentage, 40);
-    assert.equal(res.attempt.passed, false);
-    assert.deepEqual(res.attempt.answers, {
+    assert.equal(resLocked.attempt.scoreObtained, 2);
+    assert.equal(resLocked.attempt.totalMarks, 5);
+    assert.equal(resLocked.attempt.percentage, 40);
+    assert.equal(resLocked.attempt.passed, false);
+    assert.deepEqual(resLocked.attempt.answers, {
       'q-opt-a': 'A',
       'q-legacy-c': 'B',
     });
-    assert.equal(res.review[0].isCorrect, true);
-    assert.equal(res.review[0].selectedOption, slotFor4);
-    assert.equal(res.review[0].correctOption, slotFor4);
-    assert.equal(res.review[1].isCorrect, false);
-    assert.equal(res.review[1].selectedOption, wrongSlotQ2);
+    assert.equal(resLocked.reviewPermitted, false);
+    assert.equal(resLocked.review.length, 0);
+    assert.ok(resLocked.reviewPolicyMessage);
+
+    // When policy permits review, shuffled display slots & marks are returned
+    const resPermitted = gradeLocalShuffledAttempt(
+      exam,
+      student,
+      {
+        'q-opt-a': q1.optionIds![slotFor4],
+        'q-legacy-c': q2.optionIds![wrongSlotQ2],
+      },
+      privateOptionMap,
+      120,
+      { allowAnswerReview: true }
+    );
+    assert.equal(resPermitted.reviewPermitted, true);
+    assert.equal(resPermitted.review[0].isCorrect, true);
+    assert.equal(resPermitted.review[0].selectedOption, slotFor4);
+    assert.equal(resPermitted.review[0].correctOption, slotFor4);
+    assert.equal(resPermitted.review[1].isCorrect, false);
+    assert.equal(resPermitted.review[1].selectedOption, wrongSlotQ2);
+
+    // Fail-closed: missing option map rejects marking
+    assert.throws(
+      () => gradeLocalShuffledAttempt(exam, student, {}, {}, 120),
+      /missing or incomplete/i
+    );
+
+    // Raw display slot ('A') must not match opaque optionIds
+    const resTamperedSlot = gradeLocalShuffledAttempt(
+      exam,
+      student,
+      {
+        'q-opt-a': 'A',
+        'q-legacy-c': 'C',
+      },
+      privateOptionMap,
+      120
+    );
+    assert.equal(resTamperedSlot.attempt.scoreObtained, 0);
   });
 
   // 5. Safe Legacy Question Conversion
@@ -310,8 +347,8 @@ function runTests() {
     assert.ok(elapsedMs < 2000, `Expected 30x60 benchmark < 2000ms, got ${elapsedMs.toFixed(1)}ms`);
   });
 
-  // 7. Static SQL Migration vs TypeScript RPC Contract Verification
-  test('SQL migration enforces search_path security, zero student access to option maps, and matching RPC names', () => {
+  // 7. Static SQL Migration vs TypeScript RPC Contract & Hardening Verification
+  test('SQL migration enforces fail-closed grading, review policy, portable RNG, FKs/CHECKs, and matching RPC contracts', () => {
     const sqlPath = path.resolve(
       process.cwd(),
       'supabase/migrations/20260503_cbt_option_shuffling.sql'
@@ -329,13 +366,42 @@ function runTests() {
     assert.equal(secDefCount, 6);
     assert.equal(searchPathCount, 6);
 
-    // Private option map table must have RLS enabled & zero anon/authenticated privileges
+    // Private option map table must have RLS enabled, FKs, CHECKs, updated_at trigger & zero student privileges
     assert.ok(
       sql.includes('ALTER TABLE public.cbt_exam_session_options ENABLE ROW LEVEL SECURITY;')
     );
     assert.ok(
       sql.includes('REVOKE ALL ON TABLE public.cbt_exam_session_options FROM PUBLIC, anon, authenticated;')
     );
+    assert.ok(sql.includes('fk_cbt_exam_session_options_exam'));
+    assert.ok(sql.includes('fk_cbt_exam_session_options_student'));
+    assert.ok(sql.includes('chk_cbt_exam_session_options_valid'));
+    assert.ok(sql.includes('chk_cbt_exam_sessions_draft_answers_object'));
+    assert.ok(sql.includes('trg_cbt_exam_session_options_updated_at'));
+
+    // Helper functions must remain restricted to service_role (never executable by anon/authenticated)
+    assert.ok(
+      sql.includes('REVOKE ALL ON FUNCTION public.cbt_fisher_yates_shuffle_keys() FROM PUBLIC, anon, authenticated;')
+    );
+    assert.ok(
+      sql.includes('REVOKE ALL ON FUNCTION public.cbt_ensure_session_shuffled_options(text, text, text) FROM PUBLIC, anon, authenticated;')
+    );
+
+    // Portable bytea CSPRNG RNG (must NOT use invalid 'x' || ...::bit(32) cast)
+    assert.equal(sql.includes('::bit(32)'), false);
+    assert.ok(sql.includes('pg_catalog.decode('));
+    assert.ok(sql.includes('pg_catalog.get_byte('));
+
+    // Fail-closed grading: zero LEFT JOIN to cbt_exam_session_options and zero raw slot fallback
+    assert.equal(/LEFT\s+JOIN\s+public\.cbt_exam_session_options/i.test(sql), false);
+    assert.equal(sql.includes("opt->>'slot' ="), false);
+    assert.ok(sql.includes('Session option mapping is missing or incomplete'));
+
+    // Review policy columns and fail-closed default
+    assert.ok(sql.includes('cbt_allow_answer_review boolean NOT NULL DEFAULT false'));
+    assert.ok(sql.includes('allow_answer_review boolean'));
+    assert.ok(sql.includes('v_review_permitted'));
+    assert.ok(sql.includes('reviewPermitted'));
 
     // RPC names & argument names match service calls
     for (const rpc of [
@@ -351,6 +417,57 @@ function runTests() {
     assert.ok(sql.includes('p_answers jsonb'));
     assert.ok(service.includes('p_exam_id: examId'));
     assert.ok(service.includes('p_answers: answers'));
+  });
+
+  // 8. Read-Only Preflight SQL Safety Verification
+  test('Preflight SQL script is strictly read-only and uses pg_temp functions only', () => {
+    const preflightPath = path.resolve(
+      process.cwd(),
+      'supabase/migrations/20260503_cbt_option_shuffling_preflight.sql'
+    );
+    const preflight = fs.readFileSync(preflightPath, 'utf8');
+
+    assert.ok(preflight.includes('pg_temp.run_cbt_shuffling_preflight'));
+    assert.equal(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|TRIGGER|FUNCTION\s+public\.)/i.test(preflight), false);
+    assert.equal(/\b(?:INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|ALTER\s+TABLE|DROP\s+TABLE|TRUNCATE)\b/i.test(preflight), false);
+  });
+
+  // 9. Standalone Single-Statement Read-Only Verification Query Safety & Coverage
+  test('Standalone verification SQL is a single WITH...SELECT statement with zero DDL/DML and all 7 check sections', () => {
+    const verifyPath = path.resolve(
+      process.cwd(),
+      'supabase/migrations/20260503_cbt_option_shuffling_verify.sql'
+    );
+    const verifySql = fs.readFileSync(verifyPath, 'utf8');
+
+    // Strip SQL comments and single-quoted string literals before structural & keyword checks
+    const strippedComments = verifySql.replace(/--.*$/gm, '').trim();
+    const strippedTokens = strippedComments.replace(/'(?:''|[^'])*'/g, "''").trim();
+    assert.ok(strippedTokens.startsWith('WITH'), 'Verification SQL must start with WITH CTE');
+    assert.ok(strippedTokens.endsWith(';'), 'Verification SQL must end with a single semicolon');
+
+    const semicolons = strippedTokens.match(/;/g) || [];
+    assert.equal(semicolons.length, 1, 'Verification SQL must contain exactly one top-level SQL statement');
+    // Zero DDL, DML, DO blocks, or pg_temp creation
+    assert.equal(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|GRANT|REVOKE)\b/i.test(strippedTokens), false);
+    assert.equal(/\bDO\s+\$\$/i.test(strippedTokens), false);
+    assert.equal(/\bpg_temp\b/i.test(strippedTokens), false);
+
+    // Must cover summary + all 7 required diagnostic categories and exact schema.sql param names
+    for (const category of [
+      '00_SUMMARY',
+      '01_REQUIRED_TABLES',
+      '02_REQUIRED_COLUMNS',
+      '03_RPC_SIGNATURES',
+      '04_TRIGGERS_AND_HELPERS',
+      '05_RLS_POLICIES',
+      '06_CONFLICTING_OBJECTS',
+      '07_DATA_INTEGRITY',
+    ]) {
+      assert.ok(verifySql.includes(`'${category}'`), `Missing category ${category}`);
+    }
+    assert.ok(verifySql.includes("('is_student_owner', 'target_student_id text', 'boolean')"));
+    assert.ok(verifySql.includes("('student_in_class', 'target_class_id text', 'boolean')"));
   });
 
   console.log(`\nAll ${passedCount} CBT option shuffling tests passed.`);

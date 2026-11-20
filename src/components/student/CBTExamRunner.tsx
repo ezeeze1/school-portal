@@ -69,6 +69,8 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
   const [autoSubmittedDueToTime, setAutoSubmittedDueToTime] = useState(false);
   const [finalAttempt, setFinalAttempt] = useState<CBTAttempt | null>(null);
   const [submissionReview, setSubmissionReview] = useState<CBTQuestionReview[]>([]);
+  const [reviewPermitted, setReviewPermitted] = useState<boolean>(false);
+  const [reviewPolicyMessage, setReviewPolicyMessage] = useState<string | null>(null);
 
   const currentQ = exam.questions[currentQuestionIndex];
 
@@ -161,7 +163,14 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
     try {
       const response = await submitCBTExamSession(exam.id, userAnswersRef.current);
       setFinalAttempt(response.attempt);
-      setSubmissionReview(response.review || []);
+      const nextReview = Array.isArray(response.review) ? response.review : [];
+      const permitted =
+        typeof response.reviewPermitted === 'boolean'
+          ? response.reviewPermitted && nextReview.length > 0
+          : nextReview.length > 0;
+      setSubmissionReview(permitted ? nextReview : []);
+      setReviewPermitted(permitted);
+      setReviewPolicyMessage(response.reviewPolicyMessage ?? null);
       if (isAutoSubmit) {
         setAutoSubmittedDueToTime(true);
       }
@@ -329,57 +338,67 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
             </div>
           </div>
 
-          {/* Question-by-Question Detailed Review from Server */}
-          <div className="space-y-6">
-            <h3 className="font-serif font-bold text-xl text-amber-400">Detailed Answer Review</h3>
-            {submissionReview.map((item, idx) => {
-              const selectedOpt = item.selectedOption;
-              const isCorrect = item.isCorrect;
+          {/* Question-by-Question Detailed Review from Server (Policy-Gated) */}
+          {reviewPermitted && submissionReview.length > 0 ? (
+            <div className="space-y-6">
+              <h3 className="font-serif font-bold text-xl text-amber-400">Detailed Answer Review</h3>
+              {submissionReview.map((item, idx) => {
+                const selectedOpt = item.selectedOption;
+                const isCorrect = item.isCorrect;
 
-              return (
-                <div
-                  key={item.questionId}
-                  className={`p-6 rounded-2xl border space-y-3 ${
-                    isCorrect ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-red-950/30 border-red-800/60'
-                  }`}
-                >
-                  <div className="flex justify-between items-start gap-4">
-                    <span className="font-bold text-sm text-slate-200">
-                      Q{idx + 1}. {item.question}
-                    </span>
-                    <span className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
-                      isCorrect ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'
-                    }`}>
-                      {isCorrect ? `+${item.earnedMarks} Marks` : `0 / ${item.marks} Marks`}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    {(['A', 'B', 'C', 'D'] as const).map((opt) => (
-                      <div
-                        key={opt}
-                        className={`p-2.5 rounded-xl border ${
-                          opt === item.correctOption
-                            ? 'bg-emerald-900/60 border-emerald-500 text-white font-bold'
-                            : selectedOpt === opt
-                            ? 'bg-red-900/60 border-red-500 text-white font-bold'
-                            : 'bg-slate-800/50 border-slate-700 text-slate-400'
-                        }`}
-                      >
-                        {opt}. {item.options[opt]}
-                      </div>
-                    ))}
-                  </div>
-
-                  {item.explanation && (
-                    <div className="p-3 bg-slate-800/70 border border-slate-700 rounded-xl text-xs text-amber-200">
-                      <strong className="text-amber-400">Explanation:</strong> {item.explanation}
+                return (
+                  <div
+                    key={item.questionId}
+                    className={`p-6 rounded-2xl border space-y-3 ${
+                      isCorrect ? 'bg-emerald-950/30 border-emerald-800/60' : 'bg-red-950/30 border-red-800/60'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-4">
+                      <span className="font-bold text-sm text-slate-200">
+                        Q{idx + 1}. {item.question}
+                      </span>
+                      <span className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
+                        isCorrect ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'
+                      }`}>
+                        {isCorrect ? `+${item.earnedMarks} Marks` : `0 / ${item.marks} Marks`}
+                      </span>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      {(['A', 'B', 'C', 'D'] as const).map((opt) => (
+                        <div
+                          key={opt}
+                          className={`p-2.5 rounded-xl border ${
+                            item.correctOption && opt === item.correctOption
+                              ? 'bg-emerald-900/60 border-emerald-500 text-white font-bold'
+                              : selectedOpt === opt
+                              ? 'bg-red-900/60 border-red-500 text-white font-bold'
+                              : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                          }`}
+                        >
+                          {opt}. {item.options[opt]}
+                        </div>
+                      ))}
+                    </div>
+
+                    {item.explanation && (
+                      <div className="p-3 bg-slate-800/70 border border-slate-700 rounded-xl text-xs text-amber-200">
+                        <strong className="text-amber-400">Explanation:</strong> {item.explanation}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-5 bg-slate-800/50 border border-slate-700 rounded-2xl text-center space-y-1.5">
+              <p className="text-sm font-bold text-amber-300">Answer Key Review Withheld</p>
+              <p className="text-xs text-slate-400">
+                {reviewPolicyMessage ||
+                  'Correct answers and explanations are withheld in accordance with the school examination review policy.'}
+              </p>
+            </div>
+          )}
 
           <div className="text-center pt-4 space-y-3 border-t border-slate-800">
             <p className="text-xs text-slate-400">
