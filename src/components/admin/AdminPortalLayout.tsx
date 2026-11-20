@@ -7,6 +7,7 @@ import { ParentManager } from './ParentManager';
 import { ApplicationsManager } from './ApplicationsManager';
 import { AcademicSessionManager } from './AcademicSessionManager';
 import { SubjectManager } from './SubjectManager';
+import { CBTQuestionBankBuilder } from '../teacher/CBTQuestionBankBuilder';
 import {
   LayoutDashboard,
   School,
@@ -17,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   BookOpen,
+  Clock,
 } from 'lucide-react';
 
 export const AdminPortalLayout: React.FC = () => {
@@ -29,6 +31,7 @@ export const AdminPortalLayout: React.FC = () => {
     { id: 'teachers', label: 'Staff & Faculty', icon: Users },
     { id: 'parents', label: 'Parents & Guardians', icon: UserCheck },
     { id: 'subjects', label: 'Curriculum & Subjects', icon: BookOpen },
+    { id: 'cbt', label: 'CBT Exam Builder', icon: Clock },
     { id: 'applications', label: 'Online Applications Desk', icon: FileText },
     { id: 'sessions', label: 'Sessions & Settings', icon: Settings },
   ];
@@ -83,6 +86,7 @@ export const AdminPortalLayout: React.FC = () => {
           {activeTab === 'teachers' && <TeacherManager />}
           {activeTab === 'parents' && <ParentManager />}
           {activeTab === 'subjects' && <SubjectManager />}
+          {activeTab === 'cbt' && <CBTQuestionBankBuilder />}
           {activeTab === 'applications' && <ApplicationsManager />}
           {activeTab === 'sessions' && <AcademicSessionManager />}
         </div>

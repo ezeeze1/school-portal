@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { Users, UserCheck, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key, School } from 'lucide-react';
+import { Users, UserCheck, BookOpen, GraduationCap, Award, Settings, FileText, CheckCircle2, Download, ShieldCheck, Plus, X, Key, School, Clock } from 'lucide-react';
 
 export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onNavigate }) => {
   const { currentUser, adminCredentials, students, teachers, parents, classes, applications, subjects, addSubject, systemSettings } = useSchool();
@@ -208,6 +208,15 @@ export const AdminDashboard: React.FC<{ onNavigate: (tab: string) => void }> = (
             <BookOpen className="w-6 h-6 text-purple-500 mb-2" />
             <p className="font-bold text-xs text-slate-900 dark:text-white">Curriculum & Subject Manager</p>
             <p className="text-[11px] text-slate-500">Define subjects, codes & department categories ({subjects.length} registered)</p>
+          </button>
+
+          <button
+            onClick={() => onNavigate('cbt')}
+            className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-left space-y-1 transition-all border border-slate-200 dark:border-slate-700"
+          >
+            <Clock className="w-6 h-6 text-emerald-500 mb-2" />
+            <p className="font-bold text-xs text-slate-900 dark:text-white">CBT Exam & Question Builder</p>
+            <p className="text-[11px] text-slate-500">Create CBT exams with automatic student answer option shuffling</p>
           </button>
 
           <button

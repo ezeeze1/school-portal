@@ -1196,9 +1196,36 @@ export const supabaseSchoolService = {
     return data as CBTStartResponse;
   },
 
+  async saveCBTExamAnswers(
+    examId: string,
+    answers: Record<string, string>
+  ): Promise<{ ok: boolean; savedAnswers?: Record<string, string>; error?: string }> {
+    if (!supabase) {
+      return { ok: false, error: 'Supabase client is not initialized.' };
+    }
+    try {
+      const { data, error } = await supabase.rpc('save_cbt_exam_answers', {
+        p_exam_id: examId,
+        p_answers: answers,
+      });
+      if (error) {
+        return { ok: false, error: error.message || 'Unable to save CBT draft answers.' };
+      }
+      return {
+        ok: true,
+        savedAnswers: (data as { savedAnswers?: Record<string, string> } | null)?.savedAnswers,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to save CBT draft answers.',
+      };
+    }
+  },
+
   async submitCBTExam(
     examId: string,
-    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+    answers: Record<string, string>
   ): Promise<CBTSubmissionResponse> {
     if (!supabase) {
       throw new Error('Supabase client is not initialized.');
@@ -1211,6 +1238,17 @@ export const supabaseSchoolService = {
       throw new Error(error.message || 'Unable to submit CBT exam.');
     }
     return data as CBTSubmissionResponse;
+  },
+
+  async getCBTActiveSessionExamIds(): Promise<string[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase.rpc('get_cbt_active_session_exam_ids');
+      if (error || !Array.isArray(data)) return [];
+      return data.filter((id): id is string => typeof id === 'string');
+    } catch {
+      return [];
+    }
   },
 
   // Admin-only result passcode persistence
@@ -1514,7 +1552,8 @@ export const supabaseSchoolService = {
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('student-auth-login', {
+      const { data, error, response } = await supabase.functions.invoke('student-auth-login', {
+        method: 'POST',
         body: { admissionNo, password },
       });
 
@@ -1524,30 +1563,80 @@ export const supabaseSchoolService = {
           message?: string;
           context?: Response;
         };
+        const responseObj = response ?? errObj.context;
         let parsedBody: Record<string, unknown> | null = null;
-        let statusCode: number | undefined;
+        let statusCode: number | undefined = responseObj?.status;
 
-        if (errObj.context && typeof errObj.context.json === 'function') {
-          statusCode = errObj.context.status;
+        if (responseObj && typeof responseObj.json === 'function') {
           try {
-            const json = await errObj.context.clone().json();
+            const json = await responseObj.clone().json();
             if (json && typeof json === 'object') {
               parsedBody = json as Record<string, unknown>;
             }
           } catch {
-            // Non-JSON response (e.g. gateway 404 when function not deployed)
+            // Non-JSON response (e.g. gateway 404/503)
           }
         }
 
-        if (parsedBody && typeof parsedBody.error === 'string') {
+        const bodyCode =
+          typeof parsedBody?.code === 'string'
+            ? parsedBody.code
+            : typeof parsedBody?.code === 'number'
+              ? String(parsedBody.code)
+              : undefined;
+        const bodyError = typeof parsedBody?.error === 'string' ? parsedBody.error : undefined;
+        const gatewayMessage =
+          typeof parsedBody?.message === 'string' ? parsedBody.message : undefined;
+
+        const isWrongFunctionAuthRejection =
+          statusCode === 401 &&
+          (bodyCode === 'missing_auth' ||
+            (bodyError !== undefined && /missing or invalid authorization header/i.test(bodyError)));
+        const isGatewayAuthRejection =
+          statusCode === 401 &&
+          gatewayMessage !== undefined &&
+          /missing authorization header|invalid jwt/i.test(gatewayMessage);
+
+        if (import.meta.env.DEV) {
+          console.warn('[student-auth-login][dev]', {
+            status: statusCode ?? null,
+            errorName: errObj.name ?? null,
+            code: bodyCode ?? null,
+            gatewayMessage: gatewayMessage ?? null,
+            hint: isWrongFunctionAuthRejection
+              ? 'Endpoint returned missing_auth: verify supabase/functions/student-auth-login/index.ts (not admin-account-provisioning) is deployed to the student-auth-login slug.'
+              : isGatewayAuthRejection
+                ? 'Supabase gateway rejected unauthenticated POST: disable JWT verification on student-auth-login.'
+                : undefined,
+          });
+        }
+
+        if (isWrongFunctionAuthRejection || isGatewayAuthRejection) {
           return {
             ok: false,
-            code: typeof parsedBody.code === 'string' ? parsedBody.code : undefined,
-            error: parsedBody.error,
+            code: 'service_misconfigured',
+            error:
+              'Student sign-in service is temporarily unavailable due to a server configuration error. Please contact the school administrator.',
+          };
+        }
+
+        if (bodyError) {
+          return {
+            ok: false,
+            code: bodyCode,
+            error: bodyError,
             retryAfterSeconds:
-              typeof parsedBody.retryAfterSeconds === 'number'
+              typeof parsedBody?.retryAfterSeconds === 'number'
                 ? parsedBody.retryAfterSeconds
                 : undefined,
+          };
+        }
+
+        if (statusCode === 503) {
+          return {
+            ok: false,
+            code: 'service_unavailable',
+            error: 'Student sign-in service is temporarily unavailable. Please try again later.',
           };
         }
 
@@ -2039,7 +2128,16 @@ export const supabaseSchoolService = {
     await safeDeleteByIds('cbt_exams', ids);
   },
 
-  deleteCBTAttempt: (id: string) => safeDeleteById('cbt_attempts', id),
+  deleteCBTAttempt: async (id: string, examId?: string, studentId?: string) => {
+    await safeDeleteById('cbt_attempts', id);
+    if (supabase && examId && studentId) {
+      await supabase
+        .from('cbt_exam_sessions')
+        .delete()
+        .eq('exam_id', examId)
+        .eq('student_id', studentId);
+    }
+  },
 
   upsertAssignment: (assignment: Assignment) =>
     safeUpsert('assignments', toAssignmentRow(assignment)),

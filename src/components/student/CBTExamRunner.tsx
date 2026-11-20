@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { CBTAttempt, CBTQuestionReview, CBTStartResponse, Student } from '../../types';
+import { CBTAttempt, CBTQuestion, CBTQuestionReview, CBTStartResponse, Student } from '../../types';
 import { Clock, AlertTriangle, CheckCircle2, Flag, ArrowLeft, ArrowRight, LogOut, RotateCcw } from 'lucide-react';
 
 interface CBTExamRunnerProps {
@@ -9,16 +9,59 @@ interface CBTExamRunnerProps {
   onFinish: () => void;
 }
 
+const OPTION_SLOTS = ['A', 'B', 'C', 'D'] as const;
+
+const getOptionValueForSlot = (question: CBTQuestion, slot: 'A' | 'B' | 'C' | 'D'): string => {
+  return question.optionIds?.[slot] || slot;
+};
+
+const isValidOptionValueForQuestion = (question: CBTQuestion, value: string): boolean => {
+  if (!value) return false;
+  if (question.optionIds) {
+    return OPTION_SLOTS.some((slot) => question.optionIds?.[slot] === value);
+  }
+  return OPTION_SLOTS.includes(value as 'A' | 'B' | 'C' | 'D');
+};
+
 export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, onFinish }) => {
-  const { submitCBTExamSession, logout } = useSchool();
+  const { submitCBTExamSession, saveCBTExamDraftAnswers, logout } = useSchool();
   const exam = session.exam;
+  const draftStorageKey = `cbt_draft_${session.sessionId}_${exam.id}_${student.id}`;
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [userAnswers, setUserAnswers] = useState<Record<string, 'A' | 'B' | 'C' | 'D'>>({});
+  const [userAnswers, setUserAnswers] = useState<Record<string, string>>(() => {
+    let localDraft: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          localDraft = parsed;
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+
+    const merged: Record<string, string> = {
+      ...(session.savedAnswers || {}),
+      ...localDraft,
+    };
+
+    const sanitized: Record<string, string> = {};
+    for (const q of exam.questions || []) {
+      const val = merged[q.id];
+      if (typeof val === 'string' && isValidOptionValueForQuestion(q, val)) {
+        sanitized[q.id] = val;
+      }
+    }
+    return sanitized;
+  });
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({});
 
-  // Server-authoritative remaining seconds
+  // Server-authoritative remaining seconds anchored against monotonic elapsed local time
   const initialRemaining = Math.max(1, session.remainingSeconds || exam.durationMinutes * 60);
+  const deadlineMsRef = useRef<number>(Date.now() + initialRemaining * 1000);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(initialRemaining);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -32,7 +75,14 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
   const userAnswersRef = useRef(userAnswers);
   useEffect(() => {
     userAnswersRef.current = userAnswers;
-  }, [userAnswers]);
+    if (!isExamCompleted) {
+      try {
+        localStorage.setItem(draftStorageKey, JSON.stringify(userAnswers));
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
+  }, [userAnswers, draftStorageKey, isExamCompleted]);
 
   const isExamCompletedRef = useRef(isExamCompleted);
   useEffect(() => {
@@ -44,18 +94,53 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
     isSubmittingRef.current = isSubmitting;
   }, [isSubmitting]);
 
-  // Timer Countdown Effect
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasUnsyncedChangesRef = useRef<boolean>(false);
+
+  const flushDraftToServer = useCallback(async () => {
+    if (isExamCompletedRef.current || isSubmittingRef.current) return;
+    const snapshot = userAnswersRef.current;
+    if (!snapshot || Object.keys(snapshot).length === 0) return;
+
+    const res = await saveCBTExamDraftAnswers(exam.id, snapshot);
+    if (res.ok) {
+      hasUnsyncedChangesRef.current = false;
+    } else {
+      hasUnsyncedChangesRef.current = true;
+    }
+  }, [exam.id, saveCBTExamDraftAnswers]);
+
+  // Sync any pending offline draft on initial resume or when connectivity returns
+  useEffect(() => {
+    if (Object.keys(userAnswersRef.current).length > 0) {
+      void flushDraftToServer();
+    }
+
+    const handleOnline = () => {
+      if (hasUnsyncedChangesRef.current || Object.keys(userAnswersRef.current).length > 0) {
+        void flushDraftToServer();
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [flushDraftToServer]);
+
+  // Timer Countdown Effect (drift-free using deadlineMsRef)
   useEffect(() => {
     if (isExamCompleted) return;
 
     const timer = setInterval(() => {
-      setTimeLeftSeconds((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
+      const nextRemaining = Math.max(0, Math.ceil((deadlineMsRef.current - Date.now()) / 1000));
+      setTimeLeftSeconds(nextRemaining);
+      if (nextRemaining <= 0) {
+        clearInterval(timer);
+      }
     }, 1000);
 
     return () => clearInterval(timer);
@@ -63,6 +148,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
 
   const handleCompleteExam = async (isAutoSubmit = false) => {
     if (isExamCompletedRef.current || isSubmittingRef.current) return;
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
 
     setIsSubmitting(true);
     isSubmittingRef.current = true;
@@ -76,6 +166,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
         setAutoSubmittedDueToTime(true);
       }
       setIsExamCompleted(true);
+      try {
+        localStorage.removeItem(draftStorageKey);
+      } catch {
+        // Ignore storage errors
+      }
     } catch (err: any) {
       setSubmitError(
         err?.message || 'Unable to submit exam answers to the server. Please retry.'
@@ -93,12 +188,26 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
     }
   }, [timeLeftSeconds, isExamCompleted]);
 
-  const handleSelectOption = (option: 'A' | 'B' | 'C' | 'D') => {
+  const handleSelectOption = (slot: 'A' | 'B' | 'C' | 'D') => {
     if (isExamCompleted || isSubmitting || !currentQ) return;
-    setUserAnswers((prev) => ({
-      ...prev,
-      [currentQ.id]: option,
-    }));
+    const optionValue = getOptionValueForSlot(currentQ, slot);
+
+    setUserAnswers((prev) => {
+      const next = {
+        ...prev,
+        [currentQ.id]: optionValue,
+      };
+      userAnswersRef.current = next;
+      return next;
+    });
+
+    hasUnsyncedChangesRef.current = true;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(() => {
+      void flushDraftToServer();
+    }, 350);
   };
 
   const toggleFlag = (questionId: string) => {
@@ -339,8 +448,9 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
 
               {/* Options Selection */}
               <div className="space-y-3">
-                {(['A', 'B', 'C', 'D'] as const).map((opt) => {
-                  const isSelected = userAnswers[currentQ.id] === opt;
+                {OPTION_SLOTS.map((opt) => {
+                  const optionValue = getOptionValueForSlot(currentQ, opt);
+                  const isSelected = userAnswers[currentQ.id] === optionValue;
 
                   return (
                     <button

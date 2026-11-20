@@ -3,6 +3,13 @@ import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, CBTQuestion } from '../../types';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import {
+  TEACHER_OPTION_A_INSTRUCTION,
+  createBlankOptionAQuestion,
+  isLegacyNonOptionAQuestion,
+  convertLegacyQuestionToOptionA,
+  validateExamQuestionsForSave,
+} from '../../lib/cbtShuffling';
+import {
   BookOpen,
   Search,
   Filter,
@@ -21,6 +28,8 @@ import {
   FolderOpen,
   Sparkles,
   ArrowRight,
+  Shuffle,
+  ArrowUpDown,
 } from 'lucide-react';
 
 export const PastQuestionsBank: React.FC = () => {
@@ -46,7 +55,10 @@ export const PastQuestionsBank: React.FC = () => {
   const [printingExam, setPrintingExam] = useState<CBTExam | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [editingExamTeacherId, setEditingExamTeacherId] = useState<string | undefined>(undefined);
   const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // New Past Exam Form State
   const [formTitle, setFormTitle] = useState('');
@@ -56,14 +68,7 @@ export const PastQuestionsBank: React.FC = () => {
   const [formSession, setFormSession] = useState('2025/2026');
   const [formDurationMinutes, setFormDurationMinutes] = useState(20);
   const [formQuestions, setFormQuestions] = useState<CBTQuestion[]>([
-    {
-      id: `pq-${Date.now()}-1`,
-      question: 'Enter question text here...',
-      options: { A: 'Option A', B: 'Option B', C: 'Option C', D: 'Option D' },
-      correctOption: 'A',
-      explanation: 'Provide explanatory notes for this answer key.',
-      marks: 1,
-    },
+    createBlankOptionAQuestion(`pq-${Date.now()}-1`),
   ]);
 
   const termsList = ['1st Term', '2nd Term', '3rd Term'];
@@ -90,28 +95,23 @@ export const PastQuestionsBank: React.FC = () => {
   });
 
   const handleOpenAddModal = () => {
+    setSaveError(null);
     setEditingExamId(null);
+    setEditingExamTeacherId(undefined);
     setFormTitle('');
-    setFormClassId('c-ss2');
-    setFormSubjectId('sub-mth');
+    setFormClassId(classes[0]?.id || 'c-ss2');
+    setFormSubjectId(subjects[0]?.id || 'sub-mth');
     setFormTerm('3rd Term');
     setFormSession('2025/2026');
     setFormDurationMinutes(20);
-    setFormQuestions([
-      {
-        id: `pq-${Date.now()}-1`,
-        question: 'Enter question text here...',
-        options: { A: 'Option A', B: 'Option B', C: 'Option C', D: 'Option D' },
-        correctOption: 'A',
-        explanation: 'Explanatory notes for students.',
-        marks: 1,
-      },
-    ]);
+    setFormQuestions([createBlankOptionAQuestion(`pq-${Date.now()}-1`)]);
     setIsAddModalOpen(true);
   };
 
   const handleOpenEditModal = (exam: CBTExam) => {
+    setSaveError(null);
     setEditingExamId(exam.id);
+    setEditingExamTeacherId(exam.teacherId);
     setFormTitle(exam.title);
     setFormClassId(exam.classId);
     setFormSubjectId(exam.subjectId);
@@ -125,21 +125,26 @@ export const PastQuestionsBank: React.FC = () => {
   const handleAddQuestionRow = () => {
     setFormQuestions((prev) => [
       ...prev,
-      {
-        id: `pq-${Date.now()}-${prev.length + 1}`,
-        question: 'Enter new past question text...',
-        options: { A: 'Option A', B: 'Option B', C: 'Option C', D: 'Option D' },
-        correctOption: 'A',
-        explanation: '',
-        marks: 1,
-      },
+      createBlankOptionAQuestion(`pq-${Date.now()}-${prev.length + 1}`),
     ]);
   };
 
   const handleUpdateQuestionRow = (idx: number, updated: Partial<CBTQuestion>) => {
     setFormQuestions((prev) => {
       const copy = [...prev];
-      copy[idx] = { ...copy[idx], ...updated };
+      copy[idx] = {
+        ...copy[idx],
+        ...updated,
+        correctOption: updated.correctOption ?? copy[idx].correctOption ?? 'A',
+      };
+      return copy;
+    });
+  };
+
+  const handleConvertLegacyRow = (idx: number) => {
+    setFormQuestions((prev) => {
+      const copy = [...prev];
+      copy[idx] = convertLegacyQuestionToOptionA(copy[idx]);
       return copy;
     });
   };
@@ -148,10 +153,19 @@ export const PastQuestionsBank: React.FC = () => {
     setFormQuestions((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const handleSavePastPaper = (e: React.FormEvent) => {
+  const handleSavePastPaper = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle) return alert('Please enter paper title.');
-    if (formQuestions.length === 0) return alert('Please add at least 1 question.');
+    setSaveError(null);
+    if (!formTitle.trim()) {
+      setSaveError('Please enter paper title.');
+      return;
+    }
+
+    const validationError = validateExamQuestionsForSave(formQuestions);
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
 
     const selectedSubj = subjects.find((s) => s.id === formSubjectId);
     const selectedCls = classes.find((c) => c.id === formClassId);
@@ -167,43 +181,62 @@ export const PastQuestionsBank: React.FC = () => {
     );
 
     if (isDuplicateArchive) {
-      alert(`Error: A past question paper already exists in the archive for ${selectedSubj?.name || 'this Subject'} (${selectedCls?.name || 'this Class'}), ${formTerm} - ${formSession}.`);
+      setSaveError(`Error: A past question paper already exists in the archive for ${selectedSubj?.name || 'this Subject'} (${selectedCls?.name || 'this Class'}), ${formTerm} - ${formSession}.`);
       return;
     }
 
+    const normalizedQuestions = formQuestions.map((q) => ({
+      ...q,
+      correctOption: q.correctOption && ['A', 'B', 'C', 'D'].includes(q.correctOption)
+        ? q.correctOption
+        : ('A' as const),
+      marks: Number(q.marks) > 0 ? Number(q.marks) : 1,
+    }));
+
     const payload: Omit<CBTExam, 'id'> = {
-      title: formTitle,
+      title: formTitle.trim(),
       subjectId: formSubjectId,
       subjectName: selectedSubj?.name || 'General',
       classId: formClassId,
       className: selectedCls?.name || 'SS 2',
-      teacherId: matchedTeacher?.id,
+      teacherId: editingExamId ? editingExamTeacherId ?? matchedTeacher?.id : matchedTeacher?.id,
       term: formTerm,
       session: formSession,
       durationMinutes: Number(formDurationMinutes),
-      totalQuestions: formQuestions.length,
-      totalMarks: formQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
+      totalQuestions: normalizedQuestions.length,
+      totalMarks: normalizedQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
       passPercentage: 50,
       startDate: new Date().toISOString().split('T')[0],
       startTime: '08:00',
       endDate: '2026-12-31',
       isPublished: true,
       shuffleQuestions: true,
-      questions: formQuestions,
+      questions: normalizedQuestions,
     };
 
-    if (editingExamId) {
-      updateCBTExam(editingExamId, payload);
-      alert('Past Question Paper successfully updated!');
-    } else {
-      createCBTExam(payload);
-      alert('New Past Question Paper successfully created and added to archive!');
-    }
+    setIsSaving(true);
+    try {
+      const result = editingExamId
+        ? await updateCBTExam(editingExamId, payload)
+        : await createCBTExam(payload);
 
-    setIsAddModalOpen(false);
+      if (!result.ok) {
+        setSaveError(result.error || 'Unable to save past question paper.');
+        return;
+      }
+
+      alert(
+        editingExamId
+          ? 'Past Question Paper successfully updated!'
+          : 'New Past Question Paper successfully created and added to archive!'
+      );
+      setIsAddModalOpen(false);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDuplicateToActiveCBT = (exam: CBTExam) => {
+  const handleDuplicateToActiveCBT = async (exam: CBTExam) => {
     const clonedTitle = `${exam.subjectName} CBT Test (Cloned from ${exam.session || 'Past Paper'})`;
     
     // Check if this exam has already been cloned to the active term and session (3rd Term, 2025/2026)
@@ -229,7 +262,7 @@ export const PastQuestionsBank: React.FC = () => {
       subjectName: exam.subjectName,
       classId: exam.classId,
       className: exam.className,
-      teacherId: matchedTeacher?.id,
+      teacherId: matchedTeacher?.id ?? exam.teacherId,
       term: '3rd Term',
       session: '2025/2026',
       durationMinutes: exam.durationMinutes,
@@ -244,7 +277,11 @@ export const PastQuestionsBank: React.FC = () => {
       questions: JSON.parse(JSON.stringify(exam.questions)),
     };
 
-    createCBTExam(payload);
+    const result = await createCBTExam(payload);
+    if (!result.ok) {
+      alert(result.error || 'Unable to deploy cloned CBT exam.');
+      return;
+    }
     alert(`Successfully deployed "${clonedTitle}" as an active CBT exam for students!`);
   };
 
@@ -810,6 +847,17 @@ export const PastQuestionsBank: React.FC = () => {
 
             {/* Questions Editor */}
             <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800 max-h-[45vh] overflow-y-auto pr-2">
+              {saveError && (
+                <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-3 rounded-xl text-xs font-bold">
+                  {saveError}
+                </div>
+              )}
+
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3 flex items-start gap-2.5 text-xs text-emerald-900 dark:text-emerald-200">
+                <Shuffle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
+                <p className="font-medium leading-relaxed">{TEACHER_OPTION_A_INSTRUCTION}</p>
+              </div>
+
               <div className="flex justify-between items-center">
                 <h4 className="font-bold text-sm text-slate-900 dark:text-white">
                   Paper Question Items ({formQuestions.length})
@@ -817,86 +865,130 @@ export const PastQuestionsBank: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleAddQuestionRow}
-                  className="bg-slate-900 text-white font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
+                  className="bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1"
                 >
                   <Plus className="w-3.5 h-3.5" /> Add Item
                 </button>
               </div>
 
-              {formQuestions.map((q, idx) => (
-                <div key={q.id || idx} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-amber-500">Question #{idx + 1}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveQuestionRow(idx)}
-                      className="text-red-500 font-bold hover:underline"
-                    >
-                      Remove
-                    </button>
-                  </div>
+              {formQuestions.map((q, idx) => {
+                const isLegacyKey = isLegacyNonOptionAQuestion(q);
+                const activeCorrectKey = q.correctOption || 'A';
 
-                  <input
-                    type="text"
-                    value={q.question}
-                    onChange={(e) => handleUpdateQuestionRow(idx, { question: e.target.value })}
-                    className="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
-                    placeholder="Enter question..."
-                  />
+                return (
+                  <div key={q.id || idx} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+                    <div className="flex flex-wrap justify-between items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-amber-500">Question #{idx + 1}</span>
+                        {!isLegacyKey ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-bold text-[10px]">
+                            Option A = Correct Answer
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-bold text-[10px]">
+                            Legacy Key Preserved: Option {activeCorrectKey}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {isLegacyKey && (
+                          <button
+                            type="button"
+                            onClick={() => handleConvertLegacyRow(idx)}
+                            className="px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[10px] flex items-center gap-1"
+                          >
+                            <ArrowUpDown className="w-3 h-3" /> Move Correct Answer to Option A
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveQuestionRow(idx)}
+                          className="text-red-500 font-bold hover:underline"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {(['A', 'B', 'C', 'D'] as const).map((opt) => (
-                      <div key={opt} className="flex items-center gap-2">
-                        <span className="font-bold text-slate-400">{opt}.</span>
+                    <input
+                      type="text"
+                      required
+                      value={q.question}
+                      onChange={(e) => handleUpdateQuestionRow(idx, { question: e.target.value })}
+                      className="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+                      placeholder="Enter examination question..."
+                    />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {(['A', 'B', 'C', 'D'] as const).map((opt) => {
+                        const isThisCorrect = activeCorrectKey === opt;
+                        const label = !isLegacyKey
+                          ? opt === 'A'
+                            ? 'Option A — Correct Answer (Compulsory) *'
+                            : `Option ${opt} — Wrong Answer *`
+                          : isThisCorrect
+                          ? `Option ${opt} — Legacy Correct Answer (Preserved) *`
+                          : `Option ${opt} — Wrong Answer *`;
+
+                        return (
+                          <div key={opt} className="space-y-1">
+                            <label
+                              className={`block text-[10px] font-bold ${
+                                isThisCorrect
+                                  ? 'text-emerald-700 dark:text-emerald-300'
+                                  : 'text-slate-500 dark:text-slate-400'
+                              }`}
+                            >
+                              {label}
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={q.options[opt]}
+                              onChange={(e) =>
+                                handleUpdateQuestionRow(idx, {
+                                  options: { ...q.options, [opt]: e.target.value },
+                                })
+                              }
+                              placeholder={
+                                isThisCorrect
+                                  ? 'Enter correct answer...'
+                                  : `Enter wrong answer (${opt})...`
+                              }
+                              className={`w-full p-2 bg-white dark:bg-slate-900 border rounded-lg text-xs ${
+                                isThisCorrect
+                                  ? 'border-emerald-400 dark:border-emerald-700'
+                                  : 'border-slate-300 dark:border-slate-700'
+                              }`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-wrap gap-4 items-center pt-1">
+                      <div className="flex-1 min-w-[200px]">
                         <input
                           type="text"
-                          value={q.options[opt]}
-                          onChange={(e) =>
-                            handleUpdateQuestionRow(idx, {
-                              options: { ...q.options, [opt]: e.target.value },
-                            })
-                          }
-                          className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
+                          value={q.explanation || ''}
+                          onChange={(e) => handleUpdateQuestionRow(idx, { explanation: e.target.value })}
+                          placeholder="Explanatory notes / solution..."
+                          className="w-full p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-xs"
                         />
                       </div>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-wrap gap-4 items-center pt-1">
-                    <div>
-                      <label className="font-bold mr-2 text-slate-700 dark:text-slate-300">Correct Option:</label>
-                      <select
-                        value={q.correctOption || 'A'}
-                        onChange={(e) => handleUpdateQuestionRow(idx, { correctOption: e.target.value as any })}
-                        className="p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-bold text-amber-500"
-                      >
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                        <option value="C">C</option>
-                        <option value="D">D</option>
-                      </select>
-                    </div>
-
-                    <div className="flex-1 min-w-[200px]">
-                      <input
-                        type="text"
-                        value={q.explanation || ''}
-                        onChange={(e) => handleUpdateQuestionRow(idx, { explanation: e.target.value })}
-                        placeholder="Explanatory notes / solution..."
-                        className="w-full p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-xs"
-                      />
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex gap-3 flex-wrap">
               <button
                 type="submit"
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-lg"
+                disabled={isSaving}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold py-3 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 shadow-lg"
               >
-                <CheckCircle2 className="w-4 h-4" /> Save Past Question Paper
+                <CheckCircle2 className="w-4 h-4" /> {isSaving ? 'Saving...' : 'Save Past Question Paper'}
               </button>
               {editingExamId && (
                 <button

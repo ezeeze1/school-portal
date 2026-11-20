@@ -221,6 +221,16 @@ export interface CBTQuestion {
     C: string;
     D: string;
   };
+  /**
+   * Opaque per-session option identifiers returned to the student runner
+   * so selections and server-side grading remain decoupled from display slots A-D.
+   */
+  optionIds?: {
+    A: string;
+    B: string;
+    C: string;
+    D: string;
+  };
   correctOption?: 'A' | 'B' | 'C' | 'D';
   explanation?: string;
   marks: number;
@@ -268,6 +278,7 @@ export interface CBTStartResponse {
   startedAt: string;
   expiresAt: string;
   remainingSeconds: number;
+  savedAnswers?: Record<string, string>;
   exam: CBTExam;
 }
 

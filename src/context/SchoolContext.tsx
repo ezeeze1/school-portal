@@ -58,6 +58,12 @@ import {
   supabaseSchoolService,
   SupabasePortalSnapshot,
 } from '../services/supabaseSchoolService';
+import {
+  buildLocalShuffledExamSession,
+  gradeLocalShuffledAttempt,
+  LocalSessionOptionMap,
+  validateExamQuestionsForSave,
+} from '../lib/cbtShuffling';
 import { AuthSessionCoordinator } from '../lib/authSessionCoordinator';
 import {
   countClassDependencies,
@@ -211,16 +217,21 @@ interface SchoolContextType {
   recordAttendance: (records: Omit<AttendanceRecord, 'id'>[]) => void;
 
   // CBT Exam & Server-Side Engine
-  createCBTExam: (exam: Omit<CBTExam, 'id'>) => void;
-  updateCBTExam: (id: string, exam: Partial<CBTExam>) => void;
+  createCBTExam: (exam: Omit<CBTExam, 'id'>) => Promise<{ ok: boolean; error?: string }>;
+  updateCBTExam: (id: string, exam: Partial<CBTExam>) => Promise<{ ok: boolean; error?: string }>;
   deleteCBTExam: (id: string) => void;
   deleteMultipleCBTExams: (ids: string[]) => void;
   submitCBTAttempt: (attempt: Omit<CBTAttempt, 'id'>) => void;
   deleteCBTAttempt: (id: string) => void;
+  getCBTActiveSessionExamIds: () => Promise<string[]>;
   startCBTExamSession: (examId: string) => Promise<CBTStartResponse>;
+  saveCBTExamDraftAnswers: (
+    examId: string,
+    answers: Record<string, string>
+  ) => Promise<{ ok: boolean; savedAnswers?: Record<string, string>; error?: string }>;
   submitCBTExamSession: (
     examId: string,
-    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+    answers: Record<string, string>
   ) => Promise<CBTSubmissionResponse>;
 
   // Assignments, Submissions & Notes
@@ -1698,33 +1709,80 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     void supabaseSchoolService.upsertAttendanceBatch(newRecords);
   };
 
-  const createCBTExam = (exam: Omit<CBTExam, 'id'>) => {
+  const localCbtSessionRef = useRef<
+    Record<
+      string,
+      {
+        startResponse: CBTStartResponse;
+        privateOptionMap: Record<string, LocalSessionOptionMap>;
+        startedAtMs: number;
+      }
+    >
+  >({});
+
+  const createCBTExam = async (
+    exam: Omit<CBTExam, 'id'>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const validationError = validateExamQuestionsForSave(exam.questions || []);
+    if (validationError) {
+      return { ok: false, error: validationError };
+    }
+
     const id = `cbt-${Date.now()}`;
     const created: CBTExam = {
       ...exam,
       id,
       teacherId: resolveValidTeacherId(exam.teacherId),
     };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertCBTExam(created);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Failed to save CBT exam.' };
+      }
+    }
+
     setCbtExams((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertCBTExam(created);
+    return { ok: true };
   };
 
-  const updateCBTExam = (id: string, updated: Partial<CBTExam>) => {
-    setCbtExams((prev) =>
-      prev.map((e) => {
-        if (e.id !== id) return e;
-        const next: CBTExam = {
-          ...e,
-          ...updated,
-          teacherId:
-            'teacherId' in updated
-              ? resolveValidTeacherId(updated.teacherId)
-              : resolveValidTeacherId(e.teacherId),
+  const updateCBTExam = async (
+    id: string,
+    updated: Partial<CBTExam>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const existing = cbtExams.find((e) => e.id === id);
+    if (!existing) {
+      return { ok: false, error: 'CBT exam not found.' };
+    }
+
+    const next: CBTExam = {
+      ...existing,
+      ...updated,
+      teacherId:
+        'teacherId' in updated
+          ? resolveValidTeacherId(updated.teacherId)
+          : resolveValidTeacherId(existing.teacherId),
+    };
+
+    const validationError = validateExamQuestionsForSave(next.questions || []);
+    if (validationError) {
+      return { ok: false, error: validationError };
+    }
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertCBTExam(next);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error:
+            res.error ||
+            'Unable to update CBT exam. Please check if a student has an active session in progress.',
         };
-        void supabaseSchoolService.upsertCBTExam(next);
-        return next;
-      })
-    );
+      }
+    }
+
+    setCbtExams((prev) => prev.map((e) => (e.id === id ? next : e)));
+    return { ok: true };
   };
 
   const deleteCBTExam = (id: string) => {
@@ -1746,8 +1804,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const deleteCBTAttempt = (id: string) => {
+    const target = cbtAttempts.find((a) => a.id === id);
     setCbtAttempts((prev) => prev.filter((a) => a.id !== id));
-    void supabaseSchoolService.deleteCBTAttempt(id);
+    void supabaseSchoolService.deleteCBTAttempt(id, target?.examId, target?.studentId);
+  };
+
+  const getCBTActiveSessionExamIds = async (): Promise<string[]> => {
+    if (!isSupabaseConfigured) return [];
+    return supabaseSchoolService.getCBTActiveSessionExamIds();
   };
 
   const startCBTExamSession = async (examId: string): Promise<CBTStartResponse> => {
@@ -1756,25 +1820,59 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!localExam) {
         throw new Error('CBT exam not found.');
       }
-      const now = Date.now();
-      return {
-        sessionId: `local-${now}`,
-        startedAt: new Date(now).toISOString(),
-        expiresAt: new Date(now + localExam.durationMinutes * 60000).toISOString(),
-        remainingSeconds: localExam.durationMinutes * 60,
-        exam: {
-          ...localExam,
-          questions: localExam.questions.map(({ correctOption: _c, explanation: _e, ...q }) => q),
-        },
+      const studentId = currentUser?.id || 'local-student';
+      const cacheKey = `${examId}:${studentId}`;
+      const existingSession = localCbtSessionRef.current[cacheKey];
+      if (existingSession) {
+        const elapsedSec = Math.floor((Date.now() - existingSession.startedAtMs) / 1000);
+        const remainingSeconds = Math.max(
+          0,
+          localExam.durationMinutes * 60 - elapsedSec
+        );
+        return {
+          ...existingSession.startResponse,
+          remainingSeconds,
+        };
+      }
+      const generated = buildLocalShuffledExamSession(localExam, studentId);
+      localCbtSessionRef.current[cacheKey] = {
+        ...generated,
+        startedAtMs: Date.now(),
       };
+      return generated.startResponse;
     }
 
     return supabaseSchoolService.startCBTExam(examId);
   };
 
+  const saveCBTExamDraftAnswers = async (
+    examId: string,
+    answers: Record<string, string>
+  ): Promise<{ ok: boolean; savedAnswers?: Record<string, string>; error?: string }> => {
+    if (!isSupabaseConfigured) {
+      const studentId = currentUser?.id || 'local-student';
+      const cacheKey = `${examId}:${studentId}`;
+      const existingSession = localCbtSessionRef.current[cacheKey];
+      if (existingSession) {
+        const merged = {
+          ...(existingSession.startResponse.savedAnswers || {}),
+          ...answers,
+        };
+        existingSession.startResponse = {
+          ...existingSession.startResponse,
+          savedAnswers: merged,
+        };
+        return { ok: true, savedAnswers: merged };
+      }
+      return { ok: true, savedAnswers: answers };
+    }
+
+    return supabaseSchoolService.saveCBTExamAnswers(examId, answers);
+  };
+
   const submitCBTExamSession = async (
     examId: string,
-    answers: Record<string, 'A' | 'B' | 'C' | 'D'>
+    answers: Record<string, string>
   ): Promise<CBTSubmissionResponse> => {
     if (isSupabaseConfigured) {
       const response = await supabaseSchoolService.submitCBTExam(examId, answers);
@@ -1787,6 +1885,34 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ex.id === examId ? { ...ex, hasAttempt: true, sessionStatus: 'submitted' } : ex
         )
       );
+      return response;
+    }
+
+    const localExam = cbtExams.find((e) => e.id === examId);
+    const studentId = currentUser?.id || 'local-student';
+    const studentRecord = students.find((s) => s.id === studentId);
+    const cacheKey = `${examId}:${studentId}`;
+    const existingSession = localCbtSessionRef.current[cacheKey];
+
+    if (localExam && existingSession && studentRecord) {
+      const timeTakenSeconds = Math.max(
+        1,
+        Math.floor((Date.now() - existingSession.startedAtMs) / 1000)
+      );
+      const response = gradeLocalShuffledAttempt(
+        localExam,
+        studentRecord,
+        { ...(existingSession.startResponse.savedAnswers || {}), ...answers },
+        existingSession.privateOptionMap,
+        timeTakenSeconds
+      );
+      setCbtAttempts((prev) => [...prev, response.attempt]);
+      setCbtExams((prev) =>
+        prev.map((ex) =>
+          ex.id === examId ? { ...ex, hasAttempt: true, sessionStatus: 'submitted' } : ex
+        )
+      );
+      delete localCbtSessionRef.current[cacheKey];
       return response;
     }
 
@@ -2137,7 +2263,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteMultipleCBTExams,
         submitCBTAttempt,
         deleteCBTAttempt,
+        getCBTActiveSessionExamIds,
         startCBTExamSession,
+        saveCBTExamDraftAnswers,
         submitCBTExamSession,
         createAssignment,
         addAssignment: createAssignment,

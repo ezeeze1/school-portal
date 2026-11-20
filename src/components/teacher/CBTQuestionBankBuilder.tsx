@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, CBTQuestion, CBTAttempt } from '../../types';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
+import {
+  TEACHER_OPTION_A_INSTRUCTION,
+  createBlankOptionAQuestion,
+  isLegacyNonOptionAQuestion,
+  convertLegacyQuestionToOptionA,
+  validateExamQuestionsForSave,
+} from '../../lib/cbtShuffling';
 import {
   Plus,
   Trash2,
@@ -17,6 +24,9 @@ import {
   BarChart2,
   Sparkles,
   RotateCcw,
+  Lock,
+  Shuffle,
+  ArrowUpDown,
 } from 'lucide-react';
 
 // Interactive Spell Checker dictionary for CBT Questions
@@ -140,7 +150,20 @@ const CBTQuestionSpellingHelper: React.FC<SpellingHelperProps> = ({ text, onCorr
 };
 
 export const CBTQuestionBankBuilder: React.FC = () => {
-  const { cbtExams, cbtAttempts, createCBTExam, updateCBTExam, deleteCBTExam, deleteMultipleCBTExams, deleteCBTAttempt, classes, subjects, teachers, currentUser } = useSchool();
+  const {
+    cbtExams,
+    cbtAttempts,
+    createCBTExam,
+    updateCBTExam,
+    deleteCBTExam,
+    deleteMultipleCBTExams,
+    deleteCBTAttempt,
+    getCBTActiveSessionExamIds,
+    classes,
+    subjects,
+    teachers,
+    currentUser,
+  } = useSchool();
   const matchedTeacher =
     currentUser?.role === 'teacher'
       ? teachers.find(
@@ -151,6 +174,19 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       : undefined;
   const [activeTab, setActiveTab] = useState<'list' | 'create' | 'import'>('list');
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
+  const [activeSessionExamIds, setActiveSessionExamIds] = useState<string[]>([]);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const refreshActiveSessionLocks = useCallback(async () => {
+    const ids = await getCBTActiveSessionExamIds();
+    setActiveSessionExamIds(ids);
+  }, [getCBTActiveSessionExamIds]);
+
+  useEffect(() => {
+    void refreshActiveSessionLocks();
+  }, [refreshActiveSessionLocks, activeTab]);
 
   const toggleSelectExam = (id: string) => {
     setSelectedExamIds((prev) =>
@@ -168,6 +204,13 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
   const handleBulkDeleteCBTExams = () => {
     if (selectedExamIds.length === 0) return;
+    const lockedSelected = selectedExamIds.filter((id) => activeSessionExamIds.includes(id));
+    if (lockedSelected.length > 0) {
+      setSaveError(
+        'One or more selected exams have students currently taking an active session and cannot be deleted until finished.'
+      );
+      return;
+    }
     if (
       confirm(
         `Are you sure you want to delete ${selectedExamIds.length} selected CBT exam paper(s)? This will also permanently delete all corresponding student results and attempts. This action cannot be undone.`
@@ -175,12 +218,13 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     ) {
       deleteMultipleCBTExams(selectedExamIds);
       setSelectedExamIds([]);
-      alert('Selected CBT exam papers deleted successfully.');
+      setSaveSuccess('Selected CBT exam papers deleted successfully.');
     }
   };
 
   // Edit Mode state
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [editingExamTeacherId, setEditingExamTeacherId] = useState<string | undefined>(undefined);
 
   // View Results modal state
   const [viewingResultsExam, setViewingResultsExam] = useState<CBTExam | null>(null);
@@ -190,20 +234,14 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   const [title, setTitle] = useState('');
   const [classId, setClassId] = useState('c-ss2');
   const [subjectId, setSubjectId] = useState('sub-mth');
-  const [durationMinutes, setDurationMinutes] = useState(15);
+  const [durationMinutes, setDurationMinutes] = useState(60);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('08:00');
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
 
-  // Manual Questions List
+  // Manual Questions List (new questions always default to correctOption: 'A')
   const [questions, setQuestions] = useState<CBTQuestion[]>([
-    {
-      id: `q-${Date.now()}-1`,
-      question: 'What is the standard unit of force in physics?',
-      options: { A: 'Joule', B: 'Newton', C: 'Watt', D: 'Pascal' },
-      correctOption: 'B',
-      marks: 1,
-    },
+    createBlankOptionAQuestion(`q-${Date.now()}-1`),
   ]);
 
   // Excel / CSV Importer Raw Text State
@@ -212,7 +250,16 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
 
   const handleEditExam = (exam: CBTExam) => {
+    setSaveError(null);
+    setSaveSuccess(null);
+    if (activeSessionExamIds.includes(exam.id)) {
+      setSaveError(
+        `"${exam.title}" currently has an active in-progress student exam session. Question editing is locked until all ongoing sessions submit or expire.`
+      );
+      return;
+    }
     setEditingExamId(exam.id);
+    setEditingExamTeacherId(exam.teacherId);
     setTitle(exam.title);
     setClassId(exam.classId);
     setSubjectId(exam.subjectId);
@@ -220,44 +267,45 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setStartDate(exam.startDate);
     setStartTime(exam.startTime || '08:00');
     setShuffleQuestions(exam.shuffleQuestions ?? true);
+    // Preserve existing question keys (including legacy B/C/D keys) without silent overwriting
     setQuestions(exam.questions ? JSON.parse(JSON.stringify(exam.questions)) : []);
     setActiveTab('create');
   };
 
   const handleCancelEdit = () => {
     setEditingExamId(null);
+    setEditingExamTeacherId(undefined);
+    setSaveError(null);
     setTitle('');
-    setClassId('c-ss2');
-    setSubjectId('sub-mth');
-    setDurationMinutes(15);
+    setClassId(classes[0]?.id || 'c-ss2');
+    setSubjectId(subjects[0]?.id || 'sub-mth');
+    setDurationMinutes(60);
     setStartDate(new Date().toISOString().split('T')[0]);
     setStartTime('08:00');
-    setQuestions([
-      {
-        id: `q-${Date.now()}-1`,
-        question: 'Enter question text here...',
-        options: { A: 'Option A', B: 'Option B', C: 'Option C', D: 'Option D' },
-        correctOption: 'A',
-        marks: 1,
-      },
-    ]);
+    setQuestions([createBlankOptionAQuestion(`q-${Date.now()}-1`)]);
   };
 
   const handleAddQuestionManual = () => {
-    const newQ: CBTQuestion = {
-      id: `q-${Date.now()}-${questions.length + 1}`,
-      question: 'Enter question text here...',
-      options: { A: 'Option A', B: 'Option B', C: 'Option C', D: 'Option D' },
-      correctOption: 'A',
-      marks: 1,
-    };
+    const newQ = createBlankOptionAQuestion(`q-${Date.now()}-${questions.length + 1}`);
     setQuestions((prev) => [...prev, newQ]);
   };
 
   const handleUpdateQuestion = (idx: number, updated: Partial<CBTQuestion>) => {
     setQuestions((prev) => {
       const copy = [...prev];
-      copy[idx] = { ...copy[idx], ...updated };
+      copy[idx] = {
+        ...copy[idx],
+        ...updated,
+        correctOption: updated.correctOption ?? copy[idx].correctOption ?? 'A',
+      };
+      return copy;
+    });
+  };
+
+  const handleConvertLegacyQuestion = (idx: number) => {
+    setQuestions((prev) => {
+      const copy = [...prev];
+      copy[idx] = convertLegacyQuestionToOptionA(copy[idx]);
       return copy;
     });
   };
@@ -266,7 +314,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setQuestions((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // CSV Import Parser
+  // CSV Import Parser: supports Option-A-first 5/6 columns AND legacy 6/7-column format
   const handleParseCsv = () => {
     const lines = csvText.split('\n').filter((l) => l.trim().length > 0);
     const parsed: CBTQuestion[] = [];
@@ -274,18 +322,22 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     lines.forEach((line, index) => {
       if (index === 0 && line.toLowerCase().includes('question')) return;
       const parts = line.split(',').map((p) => p.trim().replace(/^"|"$/g, ''));
-      if (parts.length >= 6) {
+      if (parts.length >= 5) {
+        const col6Upper = (parts[5] || '').toUpperCase();
+        const isLegacyExplicitKey = ['A', 'B', 'C', 'D'].includes(col6Upper);
         parsed.push({
           id: `imp-${Date.now()}-${index}`,
           question: parts[0],
           options: {
-            A: parts[1],
-            B: parts[2],
-            C: parts[3],
-            D: parts[4],
+            A: parts[1] || '',
+            B: parts[2] || '',
+            C: parts[3] || '',
+            D: parts[4] || '',
           },
-          correctOption: (parts[5].toUpperCase() as any) || 'A',
-          explanation: parts[6] || 'Imported from Excel/CSV file',
+          correctOption: isLegacyExplicitKey ? (col6Upper as 'A' | 'B' | 'C' | 'D') : 'A',
+          explanation: isLegacyExplicitKey
+            ? parts[6] || 'Imported from Excel/CSV file'
+            : parts[5] || 'Imported from Excel/CSV file',
           marks: 1,
         });
       }
@@ -294,51 +346,88 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setImportedPreview(parsed);
   };
 
+  const handleConvertAllImportedToOptionA = () => {
+    setImportedPreview((prev) => prev.map((q) => convertLegacyQuestionToOptionA(q)));
+  };
+
   const handleApplyImportedQuestions = () => {
     if (importedPreview.length > 0) {
       setQuestions(importedPreview);
       setActiveTab('create');
-      alert(`Successfully loaded ${importedPreview.length} questions into Question Bank!`);
+      setSaveSuccess(
+        `Loaded ${importedPreview.length} questions into the Question Bank editor.`
+      );
     }
   };
 
-  const handleSaveExam = (e: React.FormEvent) => {
+  const handleSaveExam = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title) return alert('Please enter exam title.');
-    if (questions.length === 0) return alert('Please add at least 1 question.');
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    if (!title.trim()) {
+      setSaveError('Please enter an exam title.');
+      return;
+    }
+
+    const validationError = validateExamQuestionsForSave(questions);
+    if (validationError) {
+      setSaveError(validationError);
+      return;
+    }
+
+    const normalizedQuestions = questions.map((q) => ({
+      ...q,
+      correctOption: q.correctOption && ['A', 'B', 'C', 'D'].includes(q.correctOption)
+        ? q.correctOption
+        : ('A' as const),
+      marks: Number(q.marks) > 0 ? Number(q.marks) : 1,
+    }));
 
     const selectedSubj = subjects.find((s) => s.id === subjectId);
     const selectedCls = classes.find((c) => c.id === classId);
 
     const examPayload: Omit<CBTExam, 'id'> = {
-      title,
+      title: title.trim(),
       subjectId,
       subjectName: selectedSubj?.name || 'General',
       classId,
       className: selectedCls?.name || 'SS 2',
-      teacherId: matchedTeacher?.id,
+      teacherId: editingExamId ? editingExamTeacherId ?? matchedTeacher?.id : matchedTeacher?.id,
       durationMinutes: Number(durationMinutes),
-      totalQuestions: questions.length,
-      totalMarks: questions.reduce((acc, q) => acc + q.marks, 0),
+      totalQuestions: normalizedQuestions.length,
+      totalMarks: normalizedQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
       passPercentage: 50,
       startDate: startDate || new Date().toISOString().split('T')[0],
       startTime: startTime || '08:00',
-      endDate: '2026-08-30',
+      endDate: '2026-12-31',
       isPublished: true,
       shuffleQuestions,
-      questions,
+      questions: normalizedQuestions,
     };
 
-    if (editingExamId) {
-      updateCBTExam(editingExamId, examPayload);
-      alert('CBT Exam and questions successfully updated!');
-    } else {
-      createCBTExam(examPayload);
-      alert('New CBT Exam successfully created!');
-    }
+    setIsSaving(true);
+    try {
+      const result = editingExamId
+        ? await updateCBTExam(editingExamId, examPayload)
+        : await createCBTExam(examPayload);
 
-    handleCancelEdit();
-    setActiveTab('list');
+      if (!result.ok) {
+        setSaveError(result.error || 'Unable to save CBT exam. Please check your inputs.');
+        await refreshActiveSessionLocks();
+        return;
+      }
+
+      setSaveSuccess(
+        editingExamId
+          ? 'CBT Exam and questions successfully updated!'
+          : 'New CBT Exam successfully created and published!'
+      );
+      handleCancelEdit();
+      setActiveTab('list');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -357,7 +446,10 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
         <div className="flex gap-2">
           <button
-            onClick={() => setActiveTab('list')}
+            onClick={() => {
+              setSaveError(null);
+              setActiveTab('list');
+            }}
             className={`px-4 py-2 rounded-xl text-xs font-bold ${
               activeTab === 'list' ? 'bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
             }`}
@@ -366,6 +458,8 @@ export const CBTQuestionBankBuilder: React.FC = () => {
           </button>
           <button
             onClick={() => {
+              setSaveError(null);
+              setSaveSuccess(null);
               if (editingExamId) handleCancelEdit();
               setActiveTab('create');
             }}
@@ -376,7 +470,10 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             + Build New CBT Exam
           </button>
           <button
-            onClick={() => setActiveTab('import')}
+            onClick={() => {
+              setSaveError(null);
+              setActiveTab('import');
+            }}
             className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 ${
               activeTab === 'import' ? 'bg-amber-500 text-slate-950' : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
             }`}
@@ -385,6 +482,30 @@ export const CBTQuestionBankBuilder: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {saveError && (
+        <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-2xl text-xs font-bold flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {saveError}
+          </span>
+          <button type="button" onClick={() => setSaveError(null)} className="text-red-400 hover:text-red-600">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {saveSuccess && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl text-xs font-bold flex items-center justify-between gap-3">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+            {saveSuccess}
+          </span>
+          <button type="button" onClick={() => setSaveSuccess(null)} className="text-emerald-500 hover:text-emerald-700">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {activeTab === 'list' && (
         <div className="space-y-6">
@@ -469,6 +590,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                         <p className="text-purple-600 dark:text-purple-400 font-semibold pt-1">
                           Start Date & Time: <strong>{exam.startDate} @ {exam.startTime || '08:00'}</strong>
                         </p>
+                        {activeSessionExamIds.includes(exam.id) && (
+                          <p className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded mt-1">
+                            <Lock className="w-3 h-3" /> Active Exam Session In Progress (Editing Locked)
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -483,14 +609,34 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                         </button>
                         <button
                           onClick={() => handleEditExam(exam)}
-                          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                          disabled={activeSessionExamIds.includes(exam.id)}
+                          title={
+                            activeSessionExamIds.includes(exam.id)
+                              ? 'Editing locked while students are taking this exam'
+                              : 'Edit Questions'
+                          }
+                          className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
                         >
-                          <Edit3 className="w-3.5 h-3.5" /> Edit Questions
+                          {activeSessionExamIds.includes(exam.id) ? (
+                            <Lock className="w-3.5 h-3.5" />
+                          ) : (
+                            <Edit3 className="w-3.5 h-3.5" />
+                          )}{' '}
+                          Edit Questions
                         </button>
                       </div>
                       <button
-                        onClick={() => setExamToDelete(exam)}
-                        className="w-full bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all border border-red-100 dark:border-red-900/30"
+                        onClick={() => {
+                          if (activeSessionExamIds.includes(exam.id)) {
+                            setSaveError(
+                              `"${exam.title}" has an active student exam session in progress and cannot be deleted right now.`
+                            );
+                            return;
+                          }
+                          setExamToDelete(exam);
+                        }}
+                        disabled={activeSessionExamIds.includes(exam.id)}
+                        className="w-full bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-40 disabled:cursor-not-allowed text-red-600 dark:text-red-400 font-bold py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all border border-red-100 dark:border-red-900/30"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> Delete Exam Paper
                       </button>
@@ -607,6 +753,17 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
           {/* Question Items Editor */}
           <div className="space-y-6 pt-4 border-t border-slate-200 dark:border-slate-800">
+            {/* Teacher Option-A Instruction Banner */}
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-start gap-3 text-xs text-emerald-900 dark:text-emerald-200">
+              <Shuffle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold uppercase tracking-wider text-[11px] text-emerald-700 dark:text-emerald-300">
+                  Automatic Answer Option Shuffling Enabled
+                </p>
+                <p className="font-medium leading-relaxed">{TEACHER_OPTION_A_INSTRUCTION}</p>
+              </div>
+            </div>
+
             <div className="flex justify-between items-center">
               <h4 className="font-bold text-sm text-slate-900 dark:text-white">
                 Questions Builder ({questions.length} Items)
@@ -614,92 +771,167 @@ export const CBTQuestionBankBuilder: React.FC = () => {
               <button
                 type="button"
                 onClick={handleAddQuestionManual}
-                className="bg-slate-900 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1"
+                className="bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" /> Add Question
               </button>
             </div>
 
-            {questions.map((q, idx) => (
-              <div key={q.id || idx} className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="font-bold text-amber-600">Question #{idx + 1}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteQuestion(idx)}
-                    className="text-red-500 font-bold hover:underline"
-                  >
-                    Remove
-                  </button>
-                </div>
+            {questions.map((q, idx) => {
+              const isLegacyKey = isLegacyNonOptionAQuestion(q);
+              const activeCorrectKey = q.correctOption || 'A';
 
-                <textarea
-                  rows={2}
-                  value={q.question}
-                  onChange={(e) => handleUpdateQuestion(idx, { question: e.target.value })}
-                  className="w-full p-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium resize-y outline-none focus:ring-2 focus:ring-amber-500/20"
-                  placeholder="Enter question text..."
-                  spellCheck={true}
-                />
-
-                <CBTQuestionSpellingHelper
-                  text={q.question}
-                  onCorrect={(newText) => handleUpdateQuestion(idx, { question: newText })}
-                />
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {(['A', 'B', 'C', 'D'] as const).map((opt) => (
-                    <div key={opt} className="flex items-center gap-2">
-                      <span className="font-bold text-slate-500">{opt}.</span>
-                      <input
-                        type="text"
-                        value={q.options[opt]}
-                        onChange={(e) =>
-                          handleUpdateQuestion(idx, {
-                            options: { ...q.options, [opt]: e.target.value },
-                          })
-                        }
-                        className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
-                        spellCheck={true}
-                      />
+              return (
+                <div
+                  key={q.id || idx}
+                  className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 text-xs"
+                >
+                  <div className="flex flex-wrap justify-between items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-amber-600">Question #{idx + 1}</span>
+                      {!isLegacyKey ? (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-bold text-[10px]">
+                          Option A = Correct Answer (Auto-Shuffled for Students)
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 font-bold text-[10px]">
+                          Legacy Answer Key Preserved: Option {activeCorrectKey}
+                        </span>
+                      )}
                     </div>
-                  ))}
-                </div>
-
-                <div className="flex gap-4 items-center pt-2">
-                  <div>
-                    <label className="font-bold mr-2 text-slate-700 dark:text-slate-300">Correct Option:</label>
-                    <select
-                      value={q.correctOption || 'A'}
-                      onChange={(e) => handleUpdateQuestion(idx, { correctOption: e.target.value as any })}
-                      className="p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-bold text-amber-500"
-                    >
-                      <option value="A">A</option>
-                      <option value="B">B</option>
-                      <option value="C">C</option>
-                      <option value="D">D</option>
-                    </select>
+                    <div className="flex items-center gap-3">
+                      {isLegacyKey && (
+                        <button
+                          type="button"
+                          onClick={() => handleConvertLegacyQuestion(idx)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[11px] flex items-center gap-1"
+                          title="Safely swap Option A text with the legacy correct option text so Option A becomes the correct answer"
+                        >
+                          <ArrowUpDown className="w-3 h-3" /> Move Correct Answer to Option A
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteQuestion(idx)}
+                        className="text-red-500 font-bold hover:underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
+
                   <div>
-                    <label className="font-bold mr-2 text-slate-700 dark:text-slate-300">Marks:</label>
-                    <input
-                      type="number"
-                      value={q.marks}
-                      onChange={(e) => handleUpdateQuestion(idx, { marks: parseInt(e.target.value) || 1 })}
-                      className="w-16 p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-center font-bold"
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Question *
+                    </label>
+                    <textarea
+                      rows={2}
+                      required
+                      value={q.question}
+                      onChange={(e) => handleUpdateQuestion(idx, { question: e.target.value })}
+                      className="w-full p-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium resize-y outline-none focus:ring-2 focus:ring-amber-500/20"
+                      placeholder="Enter examination question..."
+                      spellCheck={true}
                     />
                   </div>
+
+                  <CBTQuestionSpellingHelper
+                    text={q.question}
+                    onCorrect={(newText) => handleUpdateQuestion(idx, { question: newText })}
+                  />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {(['A', 'B', 'C', 'D'] as const).map((opt) => {
+                      const isThisCorrect = activeCorrectKey === opt;
+                      const label = !isLegacyKey
+                        ? opt === 'A'
+                          ? 'Option A — Correct Answer (Compulsory) *'
+                          : `Option ${opt} — Wrong Answer *`
+                        : isThisCorrect
+                        ? `Option ${opt} — Legacy Correct Answer (Preserved) *`
+                        : `Option ${opt} — Wrong Answer *`;
+
+                      return (
+                        <div
+                          key={opt}
+                          className={`p-3 rounded-xl border space-y-1.5 ${
+                            isThisCorrect
+                              ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-400/70 dark:border-emerald-700/70'
+                              : 'bg-white/70 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <label
+                              className={`font-bold text-[11px] ${
+                                isThisCorrect
+                                  ? 'text-emerald-700 dark:text-emerald-300'
+                                  : 'text-slate-600 dark:text-slate-400'
+                              }`}
+                            >
+                              {label}
+                            </label>
+                            {isThisCorrect && (
+                              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-600 text-white">
+                                Correct
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            required
+                            value={q.options[opt]}
+                            onChange={(e) =>
+                              handleUpdateQuestion(idx, {
+                                options: { ...q.options, [opt]: e.target.value },
+                              })
+                            }
+                            placeholder={
+                              isThisCorrect
+                                ? 'Enter the correct answer (compulsory)...'
+                                : `Enter incorrect answer (${opt})...`
+                            }
+                            className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
+                            spellCheck={true}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-wrap gap-4 items-center pt-2">
+                    {isLegacyKey && (
+                      <span className="text-[11px] text-amber-700 dark:text-amber-300 font-semibold">
+                        Existing question answer key ({activeCorrectKey}) is preserved during grading.
+                      </span>
+                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">Marks:</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={q.marks}
+                        onChange={(e) => handleUpdateQuestion(idx, { marks: parseInt(e.target.value, 10) || 1 })}
+                        className="w-16 p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-center font-bold"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex gap-3 flex-wrap">
             <button
               type="submit"
-              className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-3.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
+              disabled={isSaving}
+              className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold py-3.5 rounded-xl text-sm transition-colors flex items-center justify-center gap-2 shadow-lg"
             >
-              <Save className="w-4 h-4" /> {editingExamId ? 'Update CBT Exam & Questions' : 'Save & Publish CBT Exam'}
+              <Save className="w-4 h-4" />{' '}
+              {isSaving
+                ? 'Saving CBT Exam...'
+                : editingExamId
+                ? 'Update CBT Exam & Questions'
+                : 'Save & Publish CBT Exam'}
             </button>
             {editingExamId && (
               <>
@@ -733,16 +965,29 @@ export const CBTQuestionBankBuilder: React.FC = () => {
               <h3 className="font-serif font-bold text-xl text-slate-900 dark:text-white">
                 Import CBT Questions from Excel / CSV
               </h3>
-              <p className="text-xs text-slate-500">Paste raw CSV data or uploaded file rows to convert into question bank format.</p>
+              <p className="text-xs text-slate-500">
+                Paste raw CSV rows. Option A should hold the correct answer and Options B, C, D the three wrong answers.
+              </p>
             </div>
           </div>
 
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 text-xs text-emerald-900 dark:text-emerald-200 font-medium">
+            {TEACHER_OPTION_A_INSTRUCTION}
+          </div>
+
           <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs space-y-2">
-            <p className="font-bold text-slate-900 dark:text-white">Expected CSV Format (1 question per line):</p>
+            <p className="font-bold text-slate-900 dark:text-white">
+              Expected CSV Format (1 question per line — Option A is automatically marked correct):
+            </p>
             <code className="block p-3 bg-slate-900 text-amber-400 font-mono rounded-xl overflow-x-auto text-[11px]">
-              Question Text, Option A, Option B, Option C, Option D, CorrectOption(A/B/C/D), Explanation
+              Question Text, Option A (Correct Answer), Option B (Wrong), Option C (Wrong), Option D (Wrong), Explanation (optional)
             </code>
-            <p className="text-slate-500 italic">Example: "What is 15 + 25?", "30", "40", "50", "60", "B", "15 plus 25 equals 40."</p>
+            <p className="text-slate-500 italic">
+              Example: "What is 15 + 25?", "40", "30", "50", "60", "15 plus 25 equals 40."
+            </p>
+            <p className="text-[11px] text-slate-400">
+              Legacy 7-column rows ending with A/B/C/D are also safely preserved with optional one-click Option A conversion below.
+            </p>
           </div>
 
           <textarea
@@ -753,13 +998,22 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             className="w-full p-4 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-2xl font-mono text-xs"
           />
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <button
               onClick={handleParseCsv}
               className="bg-slate-900 text-white font-bold px-6 py-2.5 rounded-xl text-xs flex items-center gap-1.5"
             >
               Parse & Preview Questions
             </button>
+            {importedPreview.some((q) => isLegacyNonOptionAQuestion(q)) && (
+              <button
+                type="button"
+                onClick={handleConvertAllImportedToOptionA}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-5 py-2.5 rounded-xl text-xs flex items-center gap-1.5"
+              >
+                <ArrowUpDown className="w-4 h-4" /> Convert All Imported Keys to Option A Format
+              </button>
+            )}
             {importedPreview.length > 0 && (
               <button
                 onClick={handleApplyImportedQuestions}
