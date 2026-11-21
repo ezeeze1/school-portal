@@ -9,33 +9,109 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
   const [activeSession, setActiveSession] = useState<CBTStartResponse | null>(null);
   const [startingExamId, setStartingExamId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const activeExamStorageKey = `cbt_active_exam_${student.id}`;
+  const attemptedAutoResumeRef = React.useRef<boolean>(false);
 
   // Available CBT exams for this student's class
   const classExams = cbtExams.filter(
     (e) => e.isPublished && (e.classId === student.classId || e.className.includes(student.className))
   );
 
-  const handleStartExam = async (examId: string) => {
-    setStartError(null);
-    setStartingExamId(examId);
+  const clearActiveExamMarker = React.useCallback(() => {
     try {
-      const session = await startCBTExamSession(examId);
-      setActiveSession(session);
-    } catch (err: any) {
-      setStartError(err?.message || 'Unable to start CBT examination. Please check with your teacher.');
-    } finally {
-      setStartingExamId(null);
+      sessionStorage.removeItem(activeExamStorageKey);
+    } catch {
+      // Ignore storage access errors
     }
-  };
+  }, [activeExamStorageKey]);
+
+  const handleStartExam = React.useCallback(
+    async (examId: string) => {
+      setStartError(null);
+      setStartingExamId(examId);
+      try {
+        const session = await startCBTExamSession(examId);
+        try {
+          sessionStorage.setItem(activeExamStorageKey, examId);
+        } catch {
+          // Ignore storage access errors
+        }
+        setActiveSession(session);
+      } catch (err: any) {
+        clearActiveExamMarker();
+        setStartError(
+          err?.message || 'Unable to start CBT examination. Please check with your teacher.'
+        );
+      } finally {
+        setStartingExamId(null);
+      }
+    },
+    [activeExamStorageKey, clearActiveExamMarker, startCBTExamSession]
+  );
+
+  // Seamless auto-resume if the student refreshes the browser page while inside an active exam
+  React.useEffect(() => {
+    if (attemptedAutoResumeRef.current || activeSession || startingExamId) return;
+
+    let savedActiveExamId: string | null = null;
+    try {
+      savedActiveExamId = sessionStorage.getItem(activeExamStorageKey);
+    } catch {
+      return;
+    }
+
+    if (!savedActiveExamId) {
+      attemptedAutoResumeRef.current = true;
+      return;
+    }
+
+    const matchingExam = classExams.find((e) => e.id === savedActiveExamId);
+    if (!matchingExam) {
+      return;
+    }
+
+    attemptedAutoResumeRef.current = true;
+
+    const alreadyAttempted = Boolean(
+      cbtAttempts.some((a) => a.examId === matchingExam.id && a.studentId === student.id) ||
+        matchingExam.hasAttempt ||
+        matchingExam.sessionStatus === 'submitted'
+    );
+    const alreadyExpired =
+      matchingExam.sessionStatus === 'expired' ||
+      (matchingExam.sessionStatus === 'in_progress' &&
+        typeof matchingExam.remainingSeconds === 'number' &&
+        matchingExam.remainingSeconds <= 0);
+
+    if (alreadyAttempted || alreadyExpired || matchingExam.cbtActive === false) {
+      clearActiveExamMarker();
+      return;
+    }
+
+    void handleStartExam(matchingExam.id);
+  }, [
+    activeExamStorageKey,
+    activeSession,
+    cbtAttempts,
+    classExams,
+    clearActiveExamMarker,
+    handleStartExam,
+    startingExamId,
+    student.id,
+  ]);
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
       
       {activeSession ? (
         <CBTExamRunner
+          key={activeSession.sessionId}
           session={activeSession}
           student={student}
-          onFinish={() => setActiveSession(null)}
+          onFinish={() => {
+            clearActiveExamMarker();
+            setActiveSession(null);
+          }}
         />
       ) : (
         <div className="space-y-6">
@@ -74,8 +150,13 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                     (a) => a.examId === exam.id && a.studentId === student.id
                   );
                   const isCompleted = Boolean(pastAttempt || exam.hasAttempt || exam.sessionStatus === 'submitted');
-                  const isExpired = exam.sessionStatus === 'expired' && !isCompleted;
-                  const isInProgress = exam.sessionStatus === 'in_progress' && !isCompleted;
+                  const isExpired =
+                    !isCompleted &&
+                    (exam.sessionStatus === 'expired' ||
+                      (exam.sessionStatus === 'in_progress' &&
+                        typeof exam.remainingSeconds === 'number' &&
+                        exam.remainingSeconds <= 0));
+                  const isInProgress = exam.sessionStatus === 'in_progress' && !isCompleted && !isExpired;
                   const isLocked = exam.cbtActive === false;
                   const isStarting = startingExamId === exam.id;
 

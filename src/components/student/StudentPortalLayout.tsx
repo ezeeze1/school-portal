@@ -37,6 +37,17 @@ export const StudentPortalLayout: React.FC = () => {
       )
     : undefined;
 
+  React.useEffect(() => {
+    if (!currentStudent?.id) return;
+    try {
+      if (sessionStorage.getItem(`cbt_active_exam_${currentStudent.id}`)) {
+        setActiveTab('cbt');
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, [currentStudent?.id]);
+
   if (!currentStudent) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16">

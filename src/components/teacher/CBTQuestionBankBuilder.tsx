@@ -1218,7 +1218,8 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
               {viewingResultsExam.questions.map((q, idx) => {
                 const studentSelected = viewingStudentScript.answers?.[q.id];
-                const isCorrect = studentSelected === q.correctOption;
+                const effectiveCorrectOption = q.correctOption || 'A';
+                const isCorrect = studentSelected === effectiveCorrectOption;
 
                 return (
                   <div
@@ -1248,7 +1249,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                       {(['A', 'B', 'C', 'D'] as const).map((optKey) => {
                         const optionText = q.options[optKey];
                         const isStudentChoice = studentSelected === optKey;
-                        const isRightOption = q.correctOption === optKey;
+                        const isRightOption = effectiveCorrectOption === optKey;
 
                         let optionBg = 'bg-slate-800/40 border-slate-800 text-slate-400';
                         if (isRightOption) {

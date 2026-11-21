@@ -60,7 +60,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
   const [flaggedQuestions, setFlaggedQuestions] = useState<Record<string, boolean>>({});
 
   // Server-authoritative remaining seconds anchored against monotonic elapsed local time
-  const initialRemaining = Math.max(1, session.remainingSeconds || exam.durationMinutes * 60);
+  const serverRemainingSeconds =
+    typeof session.remainingSeconds === 'number' && Number.isFinite(session.remainingSeconds)
+      ? session.remainingSeconds
+      : exam.durationMinutes * 60;
+  const initialRemaining = Math.max(1, serverRemainingSeconds);
   const deadlineMsRef = useRef<number>(Date.now() + initialRemaining * 1000);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(initialRemaining);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -177,6 +181,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
       setIsExamCompleted(true);
       try {
         localStorage.removeItem(draftStorageKey);
+        sessionStorage.removeItem(`cbt_active_exam_${student.id}`);
       } catch {
         // Ignore storage errors
       }

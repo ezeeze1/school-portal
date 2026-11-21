@@ -505,6 +505,16 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const resetToPublic = useCallback(
     (options?: { navigateHome?: boolean }) => {
       clearPrivateCollections();
+      try {
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+          const key = sessionStorage.key(i);
+          if (key && key.startsWith('cbt_active_exam_')) {
+            sessionStorage.removeItem(key);
+          }
+        }
+      } catch {
+        // Ignore storage access errors
+      }
       setCurrentUser(null);
       setActiveRole('public');
       setMustChangePassword(false);
@@ -1842,7 +1852,27 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return generated.startResponse;
     }
 
-    return supabaseSchoolService.startCBTExam(examId);
+    try {
+      return await supabaseSchoolService.startCBTExam(examId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (/expired/i.test(msg)) {
+        setCbtExams((prev) =>
+          prev.map((ex) =>
+            ex.id === examId ? { ...ex, sessionStatus: 'expired', remainingSeconds: 0 } : ex
+          )
+        );
+      } else if (/already completed|already been submitted/i.test(msg)) {
+        setCbtExams((prev) =>
+          prev.map((ex) =>
+            ex.id === examId
+              ? { ...ex, hasAttempt: true, sessionStatus: 'submitted', remainingSeconds: 0 }
+              : ex
+          )
+        );
+      }
+      throw err;
+    }
   };
 
   const saveCBTExamDraftAnswers = async (
@@ -1875,17 +1905,39 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     answers: Record<string, string>
   ): Promise<CBTSubmissionResponse> => {
     if (isSupabaseConfigured) {
-      const response = await supabaseSchoolService.submitCBTExam(examId, answers);
-      setCbtAttempts((prev) => {
-        const filtered = prev.filter((a) => a.id !== response.attempt.id);
-        return [...filtered, response.attempt];
-      });
-      setCbtExams((prev) =>
-        prev.map((ex) =>
-          ex.id === examId ? { ...ex, hasAttempt: true, sessionStatus: 'submitted' } : ex
-        )
-      );
-      return response;
+      try {
+        const response = await supabaseSchoolService.submitCBTExam(examId, answers);
+        setCbtAttempts((prev) => {
+          const filtered = prev.filter((a) => a.id !== response.attempt.id);
+          return [...filtered, response.attempt];
+        });
+        setCbtExams((prev) =>
+          prev.map((ex) =>
+            ex.id === examId
+              ? { ...ex, hasAttempt: true, sessionStatus: 'submitted', remainingSeconds: 0 }
+              : ex
+          )
+        );
+        return response;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (/expired/i.test(msg)) {
+          setCbtExams((prev) =>
+            prev.map((ex) =>
+              ex.id === examId ? { ...ex, sessionStatus: 'expired', remainingSeconds: 0 } : ex
+            )
+          );
+        } else if (/completed attempt already exists|already been submitted/i.test(msg)) {
+          setCbtExams((prev) =>
+            prev.map((ex) =>
+              ex.id === examId
+                ? { ...ex, hasAttempt: true, sessionStatus: 'submitted', remainingSeconds: 0 }
+                : ex
+            )
+          );
+        }
+        throw err;
+      }
     }
 
     const localExam = cbtExams.find((e) => e.id === examId);

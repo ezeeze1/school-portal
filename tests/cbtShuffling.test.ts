@@ -448,10 +448,12 @@ function runTests() {
 
     const semicolons = strippedTokens.match(/;/g) || [];
     assert.equal(semicolons.length, 1, 'Verification SQL must contain exactly one top-level SQL statement');
-    // Zero DDL, DML, DO blocks, or pg_temp creation
+    // Zero DDL, DML, DO blocks, XML queries, pg_catalog.substring(... FROM ...), or pg_temp creation
     assert.equal(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|GRANT|REVOKE)\b/i.test(strippedTokens), false);
     assert.equal(/\bDO\s+\$\$/i.test(strippedTokens), false);
     assert.equal(/\bpg_temp\b/i.test(strippedTokens), false);
+    assert.equal(/\bquery_to_xml\b/i.test(verifySql), false);
+    assert.equal(/pg_catalog\.substring\s*\([^;]*\bFROM\b/i.test(verifySql), false);
 
     // Must cover summary + all 7 required diagnostic categories and exact schema.sql param names
     for (const category of [
@@ -468,6 +470,42 @@ function runTests() {
     }
     assert.ok(verifySql.includes("('is_student_owner', 'target_student_id text', 'boolean')"));
     assert.ok(verifySql.includes("('student_in_class', 'target_class_id text', 'boolean')"));
+    assert.ok(verifySql.includes("has_table_privilege('anon'::name, om.tbl_oid"));
+  });
+
+  // 10. Post-Migration Frontend Integration Regressions (Timer, Expiry, Refresh Resume, Teacher Script)
+  test('Frontend CBT components enforce zero-second timer accuracy, expired session detection, refresh resume, and default A script grading', () => {
+    const runnerSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/student/CBTExamRunner.tsx'),
+      'utf8'
+    );
+    const listSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/student/StudentCBTList.tsx'),
+      'utf8'
+    );
+    const layoutSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/student/StudentPortalLayout.tsx'),
+      'utf8'
+    );
+    const builderSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/teacher/CBTQuestionBankBuilder.tsx'),
+      'utf8'
+    );
+
+    // Timer must NOT use falsy || fallback when session.remainingSeconds === 0
+    assert.equal(runnerSrc.includes('session.remainingSeconds || exam.durationMinutes * 60'), false);
+    assert.ok(runnerSrc.includes("typeof session.remainingSeconds === 'number'"));
+
+    // StudentCBTList must treat in_progress with remainingSeconds <= 0 as expired, key runner by sessionId, and support sessionStorage auto-resume
+    assert.ok(listSrc.includes('exam.remainingSeconds <= 0'));
+    assert.ok(listSrc.includes('key={activeSession.sessionId}'));
+    assert.ok(listSrc.includes('cbt_active_exam_'));
+
+    // StudentPortalLayout must restore CBT tab on refresh if active exam marker exists
+    assert.ok(layoutSrc.includes('cbt_active_exam_'));
+
+    // Teacher script review modal must normalize missing correctOption to canonical 'A'
+    assert.ok(builderSrc.includes("const effectiveCorrectOption = q.correctOption || 'A';"));
   });
 
   console.log(`\nAll ${passedCount} CBT option shuffling tests passed.`);

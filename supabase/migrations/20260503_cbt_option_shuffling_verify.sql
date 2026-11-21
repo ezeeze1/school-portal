@@ -3,12 +3,11 @@
 -- SINGLE-STATEMENT READ-ONLY VERIFICATION SQL FOR:
 --   supabase/migrations/20260503_cbt_option_shuffling.sql
 -- ============================================================================
--- WHY THIS FILE IS A SINGLE `WITH ... SELECT` STATEMENT:
---   Supabase SQL Editor's multi-statement handler can return "Success. No rows
---   returned." when DDL statements (like CREATE FUNCTION pg_temp...) precede a
---   SELECT. This standalone single SELECT statement avoids DDL/pg_temp
---   completely, modifies ZERO permanent or temporary database objects, and
---   returns a full PASS / FAIL / WARN report table directly in Supabase.
+-- READ-ONLY GUARANTEE:
+--   - Single standalone WITH ... SELECT query (works directly in Supabase SQL Editor).
+--   - Executes ZERO DDL or DML (no CREATE, ALTER, DROP, INSERT, UPDATE,
+--     DELETE, TRUNCATE, GRANT, REVOKE, DO $$, or pg_temp objects).
+--   - Safe to run BOTH before and after 20260503_cbt_option_shuffling.sql.
 -- ============================================================================
 
 WITH
@@ -30,15 +29,15 @@ table_checks AS (
     '01_REQUIRED_TABLES'::text AS check_category,
     ('public.' || rt.tbl_name)::text AS target_name,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NOT NULL THEN 'PASS'
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NOT NULL THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NOT NULL THEN 0::bigint
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NOT NULL THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NOT NULL
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NOT NULL
         THEN 'Required table exists in public schema.'
       ELSE 'Missing required table. Execute supabase/schema.sql before this migration.'
     END::text AS details
@@ -83,16 +82,16 @@ column_checks AS (
     '02_REQUIRED_COLUMNS'::text AS check_category,
     ('public.' || rc.tbl_name)::text AS target_name,
     CASE
-      WHEN to_regclass('public.' || rc.tbl_name) IS NULL THEN 'FAIL'
+      WHEN to_regclass(format('public.%I', rc.tbl_name)) IS NULL THEN 'FAIL'
       WHEN missing.missing_list IS NOT NULL THEN 'FAIL'
       ELSE 'PASS'
     END::text AS status,
     CASE
-      WHEN to_regclass('public.' || rc.tbl_name) IS NULL THEN array_length(rc.req_cols, 1)::bigint
+      WHEN to_regclass(format('public.%I', rc.tbl_name)) IS NULL THEN array_length(rc.req_cols, 1)::bigint
       ELSE COALESCE(missing.missing_count, 0::bigint)
     END AS finding_count,
     CASE
-      WHEN to_regclass('public.' || rc.tbl_name) IS NULL
+      WHEN to_regclass(format('public.%I', rc.tbl_name)) IS NULL
         THEN 'Table does not exist; cannot verify columns.'
       WHEN missing.missing_list IS NOT NULL
         THEN 'Missing required column(s): ' || missing.missing_list
@@ -125,21 +124,21 @@ rpc_checks AS (
     '03_RPC_SIGNATURES'::text AS check_category,
     format('public.%s(%s) -> %s', rs.fn_name, rs.expected_args, rs.expected_ret)::text AS target_name,
     CASE
-      WHEN stats.fn_count = 1
+      WHEN COALESCE(stats.fn_count, 0) = 1
        AND stats.actual_args = rs.expected_args
        AND stats.actual_ret = rs.expected_ret
         THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN stats.fn_count = 1
+      WHEN COALESCE(stats.fn_count, 0) = 1
        AND stats.actual_args = rs.expected_args
        AND stats.actual_ret = rs.expected_ret
         THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN stats.fn_count = 0
+      WHEN COALESCE(stats.fn_count, 0) = 0
         THEN 'Existing CBT RPC not found; install supabase/schema.sql first.'
       WHEN stats.fn_count > 1
         THEN format('Found %s overloaded definitions for %s; resolve overload before replacing.', stats.fn_count, rs.fn_name)
@@ -156,7 +155,7 @@ rpc_checks AS (
       bool_and(p.prosecdef) AS is_secdef
     FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
-      AND p.proname = rs.fn_name
+      AND p.proname = rs.fn_name::name
   ) AS stats ON true
 
   UNION ALL
@@ -196,21 +195,21 @@ helper_checks AS (
     '04_TRIGGERS_AND_HELPERS'::text AS check_category,
     format('function: public.%s(%s) -> %s', hs.fn_name, hs.expected_args, hs.expected_ret)::text AS target_name,
     CASE
-      WHEN stats.fn_count = 1
+      WHEN COALESCE(stats.fn_count, 0) = 1
        AND stats.actual_args = hs.expected_args
        AND stats.actual_ret = hs.expected_ret
         THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN stats.fn_count = 1
+      WHEN COALESCE(stats.fn_count, 0) = 1
        AND stats.actual_args = hs.expected_args
        AND stats.actual_ret = hs.expected_ret
         THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN stats.fn_count = 0
+      WHEN COALESCE(stats.fn_count, 0) = 0
         THEN 'Required helper/trigger function is missing.'
       WHEN stats.fn_count > 1
         THEN format('Found %s overloaded definitions for %s.', stats.fn_count, hs.fn_name)
@@ -226,7 +225,7 @@ helper_checks AS (
       max(pg_catalog.pg_get_function_result(p.oid)) AS actual_ret
     FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
-      AND p.proname = hs.fn_name
+      AND p.proname = hs.fn_name::name
   ) AS stats ON true
 ),
 trigger_specs(tbl_name, trg_name) AS (
@@ -246,28 +245,34 @@ trigger_checks AS (
     '04_TRIGGERS_AND_HELPERS'::text AS check_category,
     format('trigger: public.%s.%s', ts.tbl_name, ts.trg_name)::text AS target_name,
     CASE
-      WHEN to_regclass('public.' || ts.tbl_name) IS NOT NULL AND exists_info.trg_count > 0
+      WHEN to_regclass(format('public.%I', ts.tbl_name)) IS NOT NULL
+       AND COALESCE(exists_info.enabled_count, 0) > 0
         THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN to_regclass('public.' || ts.tbl_name) IS NOT NULL AND exists_info.trg_count > 0
+      WHEN to_regclass(format('public.%I', ts.tbl_name)) IS NOT NULL
+       AND COALESCE(exists_info.enabled_count, 0) > 0
         THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN to_regclass('public.' || ts.tbl_name) IS NULL
+      WHEN to_regclass(format('public.%I', ts.tbl_name)) IS NULL
         THEN 'Base table missing; trigger cannot be verified.'
-      WHEN exists_info.trg_count > 0
-        THEN 'Required trigger is installed and active.'
+      WHEN COALESCE(exists_info.enabled_count, 0) > 0
+        THEN 'Required trigger is installed and enabled.'
+      WHEN COALESCE(exists_info.total_count, 0) > 0
+        THEN 'Trigger exists but is currently DISABLED!'
       ELSE 'Expected trigger from supabase/schema.sql was not found.'
     END::text AS details
   FROM trigger_specs ts
   LEFT JOIN LATERAL (
-    SELECT count(*)::bigint AS trg_count
+    SELECT
+      count(*)::bigint AS total_count,
+      count(*) FILTER (WHERE tg.tgenabled <> 'D')::bigint AS enabled_count
     FROM pg_catalog.pg_trigger tg
-    WHERE tg.tgrelid = to_regclass('public.' || ts.tbl_name)
-      AND tg.tgname = ts.trg_name
+    WHERE tg.tgrelid = to_regclass(format('public.%I', ts.tbl_name))::oid
+      AND tg.tgname = ts.trg_name::name
       AND NOT tg.tgisinternal
   ) AS exists_info ON true
 ),
@@ -286,21 +291,21 @@ rls_checks AS (
     '05_RLS_POLICIES'::text AS check_category,
     ('rls_enabled: public.' || rt.tbl_name)::text AS target_name,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NOT NULL
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NOT NULL
        AND COALESCE(cls.relrowsecurity, false)
        AND COALESCE(pol.pol_count, 0) > 0
         THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NOT NULL
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NOT NULL
        AND COALESCE(cls.relrowsecurity, false)
        AND COALESCE(pol.pol_count, 0) > 0
         THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN to_regclass('public.' || rt.tbl_name) IS NULL
+      WHEN to_regclass(format('public.%I', rt.tbl_name)) IS NULL
         THEN 'Table missing; RLS cannot be checked.'
       WHEN NOT COALESCE(cls.relrowsecurity, false)
         THEN 'Row Level Security is DISABLED on this table!'
@@ -310,12 +315,12 @@ rls_checks AS (
     END::text AS details
   FROM rls_tables rt
   LEFT JOIN pg_catalog.pg_class cls
-    ON cls.oid = to_regclass('public.' || rt.tbl_name)
+    ON cls.oid = to_regclass(format('public.%I', rt.tbl_name))::oid
   LEFT JOIN LATERAL (
     SELECT count(*)::bigint AS pol_count
     FROM pg_catalog.pg_policies p
-    WHERE p.schemaname = 'public'
-      AND p.tablename = rt.tbl_name
+    WHERE p.schemaname = 'public'::name
+      AND p.tablename = rt.tbl_name::name
   ) AS pol ON true
 
   UNION ALL
@@ -332,10 +337,10 @@ rls_checks AS (
       ELSE format('%s policy(ies) on cbt_exams/cbt_questions reference student or anon!', count(*))
     END::text AS details
   FROM pg_catalog.pg_policies p
-  WHERE p.schemaname = 'public'
-    AND p.tablename IN ('cbt_exams', 'cbt_questions')
+  WHERE p.schemaname = 'public'::name
+    AND p.tablename IN ('cbt_exams'::name, 'cbt_questions'::name)
     AND (
-      'anon' = ANY(p.roles)
+      'anon'::name = ANY(p.roles)
       OR COALESCE(p.qual, '') ~* 'student'
       OR COALESCE(p.with_check, '') ~* 'student'
     )
@@ -354,8 +359,8 @@ rls_checks AS (
       ELSE format('%s write policy(ies) on cbt_attempts/cbt_exam_sessions reference student!', count(*))
     END::text AS details
   FROM pg_catalog.pg_policies p
-  WHERE p.schemaname = 'public'
-    AND p.tablename IN ('cbt_attempts', 'cbt_exam_sessions')
+  WHERE p.schemaname = 'public'::name
+    AND p.tablename IN ('cbt_attempts'::name, 'cbt_exam_sessions'::name)
     AND p.cmd IN ('INSERT', 'UPDATE', 'DELETE', 'ALL')
     AND (
       COALESCE(p.qual, '') ~* 'student'
@@ -375,59 +380,71 @@ additive_col_specs(tbl_name, col_name, expected_type) AS (
     ('cbt_exams', 'allow_answer_review', 'boolean'),
     ('cbt_exam_sessions', 'draft_answers', 'jsonb')
 ),
+option_map_status AS (
+  SELECT
+    to_regclass('public.cbt_exam_session_options')::oid AS tbl_oid,
+    cls.relkind,
+    cls.relrowsecurity
+  FROM (SELECT 1) AS dummy
+  LEFT JOIN pg_catalog.pg_class cls
+    ON cls.oid = to_regclass('public.cbt_exam_session_options')::oid
+),
 conflict_checks AS (
   SELECT
     60 AS sort_order,
     '06_CONFLICTING_OBJECTS'::text AS check_category,
     'table: public.cbt_exam_session_options'::text AS target_name,
     CASE
-      WHEN to_regclass('public.cbt_exam_session_options') IS NULL THEN 'PASS'
-      WHEN NOT (
-        pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'DELETE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'DELETE')
-      )
-       AND EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('public.cbt_exam_session_options') AND c.relkind = 'r')
+      WHEN om.tbl_oid IS NULL THEN 'PASS'
+      WHEN om.relkind = 'r'
+       AND COALESCE(om.relrowsecurity, false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'SELECT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'INSERT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'UPDATE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'DELETE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'SELECT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'INSERT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'UPDATE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'DELETE'), false)
         THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN to_regclass('public.cbt_exam_session_options') IS NULL THEN 0::bigint
-      WHEN NOT (
-        pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'DELETE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'DELETE')
-      )
-       AND EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('public.cbt_exam_session_options') AND c.relkind = 'r')
+      WHEN om.tbl_oid IS NULL THEN 0::bigint
+      WHEN om.relkind = 'r'
+       AND COALESCE(om.relrowsecurity, false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'SELECT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'INSERT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'UPDATE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'DELETE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'SELECT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'INSERT'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'UPDATE'), false)
+       AND NOT COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'DELETE'), false)
         THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN to_regclass('public.cbt_exam_session_options') IS NULL
+      WHEN om.tbl_oid IS NULL
         THEN 'No conflicting object exists; ready to create.'
+      WHEN om.relkind <> 'r'
+        THEN format('Conflicting non-table object exists at public.cbt_exam_session_options (relkind=%s).', om.relkind)
+      WHEN NOT COALESCE(om.relrowsecurity, false)
+        THEN 'Existing public.cbt_exam_session_options does NOT have RLS enabled!'
       WHEN (
-        pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('anon', 'public.cbt_exam_session_options', 'DELETE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'SELECT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'INSERT')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'UPDATE')
-        OR pg_catalog.has_table_privilege('authenticated', 'public.cbt_exam_session_options', 'DELETE')
+        COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'SELECT'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'INSERT'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'UPDATE'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('anon'::name, om.tbl_oid, 'DELETE'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'SELECT'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'INSERT'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'UPDATE'), false)
+        OR COALESCE(pg_catalog.has_table_privilege('authenticated'::name, om.tbl_oid, 'DELETE'), false)
       )
         THEN 'Existing public.cbt_exam_session_options grants privileges to anon/authenticated!'
-      ELSE 'Already exists as a locked-down table (idempotent rerun safe).'
+      ELSE 'Already exists as a locked-down table with RLS enabled (idempotent rerun safe).'
     END::text AS details
+  FROM option_map_status om
 
   UNION ALL
 
@@ -464,17 +481,17 @@ conflict_checks AS (
     '06_CONFLICTING_OBJECTS'::text AS check_category,
     format('function: public.%s(%s) -> %s', nf.fn_name, nf.expected_args, nf.expected_ret)::text AS target_name,
     CASE
-      WHEN stats.fn_count = 0 THEN 'PASS'
+      WHEN COALESCE(stats.fn_count, 0) = 0 THEN 'PASS'
       WHEN stats.fn_count = 1 AND stats.actual_args = nf.expected_args AND stats.actual_ret = nf.expected_ret THEN 'PASS'
       ELSE 'FAIL'
     END::text AS status,
     CASE
-      WHEN stats.fn_count = 0 THEN 0::bigint
+      WHEN COALESCE(stats.fn_count, 0) = 0 THEN 0::bigint
       WHEN stats.fn_count = 1 AND stats.actual_args = nf.expected_args AND stats.actual_ret = nf.expected_ret THEN 0::bigint
       ELSE 1::bigint
     END AS finding_count,
     CASE
-      WHEN stats.fn_count = 0
+      WHEN COALESCE(stats.fn_count, 0) = 0
         THEN 'No conflicting function definition exists; ready to create.'
       WHEN stats.fn_count > 1
         THEN format('Conflict: %s overloaded definitions exist for %s.', stats.fn_count, nf.fn_name)
@@ -490,7 +507,7 @@ conflict_checks AS (
       max(pg_catalog.pg_get_function_result(p.oid)) AS actual_ret
     FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
-      AND p.proname = nf.fn_name
+      AND p.proname = nf.fn_name::name
   ) AS stats ON true
 
   UNION ALL
@@ -512,19 +529,22 @@ conflict_checks AS (
         SELECT count(*)::bigint
         FROM pg_catalog.pg_constraint con
         JOIN pg_catalog.pg_namespace ns ON ns.oid = con.connamespace
-        WHERE ns.nspname = 'public'
+        WHERE ns.nspname = 'public'::name
           AND (
-            (con.conname = 'chk_cbt_exam_sessions_draft_answers_object' AND con.conrelid IS DISTINCT FROM to_regclass('public.cbt_exam_sessions'))
+            (
+              con.conname = 'chk_cbt_exam_sessions_draft_answers_object'::name
+              AND con.conrelid IS DISTINCT FROM to_regclass('public.cbt_exam_sessions')::oid
+            )
             OR (
               con.conname IN (
-                'uq_cbt_session_options_session_question',
-                'fk_cbt_exam_session_options_exam',
-                'fk_cbt_exam_session_options_student',
-                'chk_cbt_exam_session_options_valid'
+                'uq_cbt_session_options_session_question'::name,
+                'fk_cbt_exam_session_options_exam'::name,
+                'fk_cbt_exam_session_options_student'::name,
+                'chk_cbt_exam_session_options_valid'::name
               )
               AND (
                 to_regclass('public.cbt_exam_session_options') IS NULL
-                OR con.conrelid IS DISTINCT FROM to_regclass('public.cbt_exam_session_options')
+                OR con.conrelid IS DISTINCT FROM to_regclass('public.cbt_exam_session_options')::oid
               )
             )
           )
@@ -532,39 +552,131 @@ conflict_checks AS (
       (
         SELECT count(*)::bigint
         FROM pg_catalog.pg_indexes idx
-        WHERE idx.schemaname = 'public'
+        WHERE idx.schemaname = 'public'::name
           AND idx.indexname IN (
-            'idx_cbt_exam_session_options_session_id',
-            'idx_cbt_exam_session_options_exam_student',
-            'uq_cbt_session_options_session_question'
+            'idx_cbt_exam_session_options_session_id'::name,
+            'idx_cbt_exam_session_options_exam_student'::name,
+            'uq_cbt_session_options_session_question'::name
           )
           AND (
             to_regclass('public.cbt_exam_session_options') IS NULL
-            OR idx.tablename <> 'cbt_exam_session_options'
+            OR idx.tablename <> 'cbt_exam_session_options'::name
           )
       ) AS idx_cnt
   ) obj_collisions
+),
+dup_sessions AS (
+  SELECT count(*)::bigint AS cnt
+  FROM (
+    SELECT 1
+    FROM public.cbt_exam_sessions
+    GROUP BY exam_id, student_id
+    HAVING count(*) > 1
+  ) d
+),
+dup_attempts AS (
+  SELECT count(*)::bigint AS cnt
+  FROM (
+    SELECT 1
+    FROM public.cbt_attempts
+    GROUP BY exam_id, student_id
+    HAVING count(*) > 1
+  ) d
+),
+orphan_session_exams AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exam_sessions ces
+  LEFT JOIN public.cbt_exams ce ON ce.id = ces.exam_id
+  WHERE ce.id IS NULL
+),
+orphan_session_students AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exam_sessions ces
+  LEFT JOIN public.students s ON s.id = ces.student_id
+  WHERE s.id IS NULL
+),
+orphan_question_exams AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_questions cq
+  LEFT JOIN public.cbt_exams ce ON ce.id = cq.exam_id
+  WHERE ce.id IS NULL
+),
+orphan_attempts AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_attempts ca
+  LEFT JOIN public.cbt_exams ce ON ce.id = ca.exam_id
+  LEFT JOIN public.students s ON s.id = ca.student_id
+  WHERE ce.id IS NULL OR s.id IS NULL
+),
+orphan_exam_refs AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exams ce
+  LEFT JOIN public.subjects sb ON sb.id = ce.subject_id
+  LEFT JOIN public.classes cl ON cl.id = ce.class_id
+  LEFT JOIN public.teachers t ON t.id = ce.teacher_id
+  WHERE sb.id IS NULL
+     OR cl.id IS NULL
+     OR (ce.teacher_id IS NOT NULL AND t.id IS NULL)
+),
+invalid_sessions AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exam_sessions
+  WHERE status NOT IN ('in_progress', 'submitted', 'expired')
+     OR jsonb_typeof(question_order) IS DISTINCT FROM 'array'
+),
+invalid_exams AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exams
+  WHERE COALESCE(duration_minutes, 0) <= 0
+     OR jsonb_typeof(questions) IS DISTINCT FROM 'array'
+),
+default_settings AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.system_settings
+  WHERE id = 'default'
+),
+active_sessions AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exam_sessions
+  WHERE status = 'in_progress'
+    AND expires_at > now()
+),
+empty_exams AS (
+  SELECT count(*)::bigint AS cnt
+  FROM public.cbt_exams ce
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM public.cbt_questions cq
+    WHERE cq.exam_id = ce.id
+  )
+    AND CASE
+      WHEN jsonb_typeof(ce.questions) = 'array'
+        THEN jsonb_array_length(ce.questions) = 0
+      ELSE true
+    END
+),
+baseline_counts AS (
+  SELECT
+    (SELECT count(*)::bigint FROM public.cbt_attempts) AS att_cnt,
+    (SELECT count(*)::bigint FROM public.cbt_questions) AS q_cnt,
+    (
+      SELECT count(*)::bigint
+      FROM public.cbt_questions
+      WHERE upper(correct_option) IN ('B', 'C', 'D')
+    ) AS leg_cnt
 ),
 data_checks AS (
   SELECT
     70 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'duplicate: cbt_exam_sessions(exam_id, student_id)'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required table/columns missing; cannot run duplicate check.'
       WHEN cnt = 0 THEN 'Zero duplicate exam sessions found.'
       ELSE format('%s duplicate (exam_id, student_id) group(s) found in cbt_exam_sessions.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN to_regclass('public.cbt_exam_sessions') IS NOT NULL
-       AND (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exam_sessions' AND column_name IN ('exam_id','student_id')) = 2
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM (SELECT 1 FROM public.cbt_exam_sessions GROUP BY exam_id, student_id HAVING count(*) > 1) d', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM dup_sessions
 
   UNION ALL
 
@@ -572,21 +684,13 @@ data_checks AS (
     71 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'duplicate: cbt_attempts(exam_id, student_id)'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required table/columns missing; cannot run duplicate check.'
       WHEN cnt = 0 THEN 'Zero duplicate exam attempts found.'
       ELSE format('%s duplicate (exam_id, student_id) group(s) found in cbt_attempts.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN to_regclass('public.cbt_attempts') IS NOT NULL
-       AND (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_attempts' AND column_name IN ('exam_id','student_id')) = 2
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM (SELECT 1 FROM public.cbt_attempts GROUP BY exam_id, student_id HAVING count(*) > 1) d', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM dup_attempts
 
   UNION ALL
 
@@ -594,21 +698,13 @@ data_checks AS (
     72 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'orphan: cbt_exam_sessions.exam_id -> cbt_exams.id'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required tables/columns missing; cannot check orphans.'
       WHEN cnt = 0 THEN 'Zero orphan exam_id rows in cbt_exam_sessions.'
       ELSE format('%s orphan cbt_exam_sessions.exam_id row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exam_sessions' AND column_name = 'exam_id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exam_sessions ces LEFT JOIN public.cbt_exams ce ON ce.id = ces.exam_id WHERE ce.id IS NULL', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM orphan_session_exams
 
   UNION ALL
 
@@ -616,21 +712,13 @@ data_checks AS (
     73 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'orphan: cbt_exam_sessions.student_id -> students.id'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required tables/columns missing; cannot check orphans.'
       WHEN cnt = 0 THEN 'Zero orphan student_id rows in cbt_exam_sessions.'
       ELSE format('%s orphan cbt_exam_sessions.student_id row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exam_sessions' AND column_name = 'student_id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'students' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exam_sessions ces LEFT JOIN public.students s ON s.id = ces.student_id WHERE s.id IS NULL', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM orphan_session_students
 
   UNION ALL
 
@@ -638,21 +726,13 @@ data_checks AS (
     74 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'orphan: cbt_questions.exam_id -> cbt_exams.id'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required tables/columns missing; cannot check orphans.'
       WHEN cnt = 0 THEN 'Zero orphan exam_id rows in cbt_questions.'
       ELSE format('%s orphan cbt_questions.exam_id row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_questions' AND column_name = 'exam_id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_questions cq LEFT JOIN public.cbt_exams ce ON ce.id = cq.exam_id WHERE ce.id IS NULL', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM orphan_question_exams
 
   UNION ALL
 
@@ -660,22 +740,13 @@ data_checks AS (
     75 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'orphan: cbt_attempts.(exam_id|student_id)'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required tables/columns missing; cannot check orphans.'
       WHEN cnt = 0 THEN 'Zero orphan exam_id or student_id rows in cbt_attempts.'
       ELSE format('%s orphan cbt_attempts row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_attempts' AND column_name IN ('exam_id','student_id')) = 2
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name = 'id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'students' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_attempts ca LEFT JOIN public.cbt_exams ce ON ce.id = ca.exam_id LEFT JOIN public.students s ON s.id = ca.student_id WHERE ce.id IS NULL OR s.id IS NULL', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM orphan_attempts
 
   UNION ALL
 
@@ -683,23 +754,13 @@ data_checks AS (
     76 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'orphan: cbt_exams.(subject_id|class_id|teacher_id)'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required tables/columns missing; cannot check orphans.'
       WHEN cnt = 0 THEN 'Zero orphan subject_id, class_id, or teacher_id rows in cbt_exams.'
       ELSE format('%s orphan foreign reference(s) found in cbt_exams.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name IN ('subject_id','class_id','teacher_id')) = 3
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'subjects' AND column_name = 'id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'classes' AND column_name = 'id')
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'teachers' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exams ce LEFT JOIN public.subjects sb ON sb.id = ce.subject_id LEFT JOIN public.classes cl ON cl.id = ce.class_id LEFT JOIN public.teachers t ON t.id = ce.teacher_id WHERE sb.id IS NULL OR cl.id IS NULL OR (ce.teacher_id IS NOT NULL AND t.id IS NULL)', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM orphan_exam_refs
 
   UNION ALL
 
@@ -707,21 +768,13 @@ data_checks AS (
     77 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'domain: cbt_exam_sessions status & question_order'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required table/columns missing.'
       WHEN cnt = 0 THEN 'All cbt_exam_sessions rows have valid status and JSONB array question_order.'
       ELSE format('%s invalid cbt_exam_sessions row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN to_regclass('public.cbt_exam_sessions') IS NOT NULL
-       AND (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exam_sessions' AND column_name IN ('status','question_order')) = 2
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exam_sessions WHERE status NOT IN (''in_progress'',''submitted'',''expired'') OR jsonb_typeof(question_order) IS DISTINCT FROM ''array''', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM invalid_sessions
 
   UNION ALL
 
@@ -729,21 +782,13 @@ data_checks AS (
     78 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'domain: cbt_exams duration_minutes & questions JSONB'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'Required table/columns missing.'
       WHEN cnt = 0 THEN 'All cbt_exams rows have duration_minutes > 0 and valid JSONB array questions.'
       ELSE format('%s invalid cbt_exams row(s) found.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN to_regclass('public.cbt_exams') IS NOT NULL
-       AND (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name IN ('duration_minutes','questions')) = 2
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exams WHERE COALESCE(duration_minutes, 0) <= 0 OR jsonb_typeof(questions) IS DISTINCT FROM ''array''', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM invalid_exams
 
   UNION ALL
 
@@ -751,20 +796,13 @@ data_checks AS (
     79 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'config: system_settings default row exists'::text AS target_name,
-    CASE WHEN cnt IS NOT NULL AND cnt = 1 THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    CASE WHEN cnt IS NOT NULL AND cnt = 1 THEN 0::bigint ELSE 1::bigint END AS finding_count,
+    CASE WHEN cnt = 1 THEN 'PASS' ELSE 'FAIL' END::text AS status,
+    CASE WHEN cnt = 1 THEN 0::bigint ELSE 1::bigint END AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'system_settings table missing.'
       WHEN cnt = 1 THEN 'system_settings row id=''default'' exists.'
       ELSE format('Expected 1 system_settings row id=''default'', found %s.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'system_settings' AND column_name = 'id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.system_settings WHERE id = ''default''', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM default_settings
 
   UNION ALL
 
@@ -772,21 +810,13 @@ data_checks AS (
     80 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'window: active in_progress cbt_exam_sessions'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'WARN' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'WARN' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'cbt_exam_sessions table/columns missing.'
       WHEN cnt = 0 THEN 'Zero students are mid-exam right now; safe window to execute migration.'
       ELSE format('%s active in-progress session(s) detected; schedule migration during a quiet window if possible.', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN to_regclass('public.cbt_exam_sessions') IS NOT NULL
-       AND (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exam_sessions' AND column_name IN ('status','expires_at')) = 2
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exam_sessions WHERE status = ''in_progress'' AND expires_at > now()', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM active_sessions
 
   UNION ALL
 
@@ -794,21 +824,13 @@ data_checks AS (
     81 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'quality: cbt_exams with zero questions'::text AS target_name,
-    CASE WHEN cnt IS NULL THEN 'FAIL' WHEN cnt = 0 THEN 'PASS' ELSE 'WARN' END::text AS status,
-    COALESCE(cnt, 1::bigint) AS finding_count,
+    CASE WHEN cnt = 0 THEN 'PASS' ELSE 'WARN' END::text AS status,
+    cnt AS finding_count,
     CASE
-      WHEN cnt IS NULL THEN 'cbt_exams/cbt_questions table/columns missing.'
       WHEN cnt = 0 THEN 'All existing CBT exams contain at least 1 question.'
       ELSE format('%s exam(s) currently have 0 questions (start_cbt_exam will refuse starting empty exams).', cnt)
     END::text AS details
-  FROM (
-    SELECT CASE
-      WHEN (SELECT count(DISTINCT column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_exams' AND column_name IN ('id','questions')) = 2
-       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_questions' AND column_name = 'exam_id')
-      THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_exams ce WHERE NOT EXISTS (SELECT 1 FROM public.cbt_questions cq WHERE cq.exam_id = ce.id) AND CASE WHEN jsonb_typeof(ce.questions) = ''array'' THEN jsonb_array_length(ce.questions) = 0 ELSE true END', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-      ELSE NULL::bigint
-    END AS cnt
-  ) q
+  FROM empty_exams
 
   UNION ALL
 
@@ -816,30 +838,15 @@ data_checks AS (
     82 AS sort_order,
     '07_DATA_INTEGRITY'::text AS check_category,
     'baseline: historical cbt_attempts & cbt_questions'::text AS target_name,
-    CASE WHEN att_cnt IS NOT NULL AND q_cnt IS NOT NULL THEN 'PASS' ELSE 'FAIL' END::text AS status,
-    COALESCE(att_cnt, 0::bigint) + COALESCE(q_cnt, 0::bigint) AS finding_count,
-    CASE
-      WHEN att_cnt IS NULL OR q_cnt IS NULL THEN 'cbt_attempts or cbt_questions table/columns missing.'
-      ELSE format('Baseline preserved counts: cbt_attempts=%s, cbt_questions=%s (legacy non-A keys=%s).', att_cnt, q_cnt, COALESCE(leg_cnt, 0))
-    END::text AS details
-  FROM (
-    SELECT
-      CASE
-        WHEN to_regclass('public.cbt_attempts') IS NOT NULL
-        THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_attempts', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-        ELSE NULL::bigint
-      END AS att_cnt,
-      CASE
-        WHEN to_regclass('public.cbt_questions') IS NOT NULL
-        THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_questions', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-        ELSE NULL::bigint
-      END AS q_cnt,
-      CASE
-        WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cbt_questions' AND column_name = 'correct_option')
-        THEN pg_catalog.substring(pg_catalog.query_to_xml('SELECT count(*)::bigint AS cnt FROM public.cbt_questions WHERE upper(correct_option) IN (''B'',''C'',''D'')', false, false, '')::text FROM '<cnt>([0-9]+)</cnt>')::bigint
-        ELSE NULL::bigint
-      END AS leg_cnt
-  ) q
+    'PASS'::text AS status,
+    (att_cnt + q_cnt)::bigint AS finding_count,
+    format(
+      'Baseline preserved counts: cbt_attempts=%s, cbt_questions=%s (legacy non-A keys=%s).',
+      att_cnt,
+      q_cnt,
+      leg_cnt
+    )::text AS details
+  FROM baseline_counts
 ),
 all_checks AS (
   SELECT * FROM table_checks
