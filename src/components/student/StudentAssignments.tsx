@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
+import { doesStudentClassMatch } from '../../lib/academicSelection';
 import { Download, FileText, CheckCircle2, Clock, Send, FileType, FileCode, AlertCircle, Award, ExternalLink } from 'lucide-react';
 
 export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) => {
@@ -13,12 +14,16 @@ export const StudentAssignments: React.FC<{ student: Student }> = ({ student }) 
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
 
-  const studentAssignments = assignments.filter(
-    (a) => a.classId === student.classId || a.className.includes(student.className) || student.className.includes(a.className)
+  const studentAssignments = assignments.filter((a) =>
+    doesStudentClassMatch(a.classId, a.className, student)
   );
 
   const studentNotes = studyNotes.filter(
-    (n) => !n.classId || n.classId === 'all' || n.classId === student.classId || n.className === 'All Classes' || n.className.includes(student.className) || student.className.includes(n.className)
+    (n) =>
+      !n.classId ||
+      n.classId === 'all' ||
+      n.className === 'All Classes' ||
+      doesStudentClassMatch(n.classId, n.className, student)
   );
 
   const handleSubmitHomework = async (asgId: string) => {

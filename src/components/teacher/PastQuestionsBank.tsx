@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { CBTExam, CBTQuestion } from '../../types';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
@@ -9,6 +9,11 @@ import {
   convertLegacyQuestionToOptionA,
   validateExamQuestionsForSave,
 } from '../../lib/cbtShuffling';
+import {
+  resolveMatchingTeacher,
+  resolveSyncedSelectionId,
+  validateAcademicEntityReferences,
+} from '../../lib/academicSelection';
 import {
   BookOpen,
   Search,
@@ -34,14 +39,7 @@ import {
 
 export const PastQuestionsBank: React.FC = () => {
   const { cbtExams, classes, subjects, teachers, currentUser, createCBTExam, updateCBTExam, deleteCBTExam, academicSessions } = useSchool();
-  const matchedTeacher =
-    currentUser?.role === 'teacher'
-      ? teachers.find(
-          (t) =>
-            t.id === currentUser.id ||
-            (currentUser.referenceId && t.staffId === currentUser.referenceId)
-        )
-      : undefined;
+  const matchedTeacher = resolveMatchingTeacher(currentUser, teachers);
 
   // Filters State
   const [selectedClass, setSelectedClass] = useState<string>('all');
@@ -58,18 +56,35 @@ export const PastQuestionsBank: React.FC = () => {
   const [editingExamTeacherId, setEditingExamTeacherId] = useState<string | undefined>(undefined);
   const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [bannerNotice, setBannerNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   // New Past Exam Form State
   const [formTitle, setFormTitle] = useState('');
-  const [formClassId, setFormClassId] = useState('c-ss2');
-  const [formSubjectId, setFormSubjectId] = useState('sub-mth');
+  const [formClassId, setFormClassId] = useState(() => classes[0]?.id || '');
+  const [formSubjectId, setFormSubjectId] = useState(() => subjects[0]?.id || '');
   const [formTerm, setFormTerm] = useState('3rd Term');
   const [formSession, setFormSession] = useState('2025/2026');
   const [formDurationMinutes, setFormDurationMinutes] = useState(20);
   const [formQuestions, setFormQuestions] = useState<CBTQuestion[]>([
     createBlankOptionAQuestion(`pq-${Date.now()}-1`),
   ]);
+
+  useEffect(() => {
+    setFormClassId((prev) =>
+      resolveSyncedSelectionId(prev, classes, {
+        preserveExistingWhenEditing: Boolean(editingExamId),
+      })
+    );
+  }, [classes, editingExamId]);
+
+  useEffect(() => {
+    setFormSubjectId((prev) =>
+      resolveSyncedSelectionId(prev, subjects, {
+        preserveExistingWhenEditing: Boolean(editingExamId),
+      })
+    );
+  }, [subjects, editingExamId]);
 
   const termsList = ['1st Term', '2nd Term', '3rd Term'];
   const sessionsList = academicSessions || ['2026/2027', '2025/2026', '2024/2025', '2023/2024'];
@@ -99,8 +114,8 @@ export const PastQuestionsBank: React.FC = () => {
     setEditingExamId(null);
     setEditingExamTeacherId(undefined);
     setFormTitle('');
-    setFormClassId(classes[0]?.id || 'c-ss2');
-    setFormSubjectId(subjects[0]?.id || 'sub-mth');
+    setFormClassId(classes[0]?.id || '');
+    setFormSubjectId(subjects[0]?.id || '');
     setFormTerm('3rd Term');
     setFormSession('2025/2026');
     setFormDurationMinutes(20);
@@ -167,8 +182,28 @@ export const PastQuestionsBank: React.FC = () => {
       return;
     }
 
-    const selectedSubj = subjects.find((s) => s.id === formSubjectId);
-    const selectedCls = classes.find((c) => c.id === formClassId);
+    const resolvedTeacherId = editingExamId
+      ? editingExamTeacherId ?? matchedTeacher?.id
+      : matchedTeacher?.id;
+
+    const refCheck = validateAcademicEntityReferences({
+      classId: formClassId,
+      subjectId: formSubjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: editingExamId ? 'update a past question paper' : 'save a past question paper',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      setSaveError(
+        refCheck.error || 'Please select a valid Target Class and Subject before saving.'
+      );
+      return;
+    }
+
+    const selectedSubj = refCheck.matchedSubject;
+    const selectedCls = refCheck.matchedClass;
 
     // Prevent saving a duplicate past question paper with the same Subject, Class, Term, and Session
     const isDuplicateArchive = cbtExams.some(e => 
@@ -181,7 +216,7 @@ export const PastQuestionsBank: React.FC = () => {
     );
 
     if (isDuplicateArchive) {
-      setSaveError(`Error: A past question paper already exists in the archive for ${selectedSubj?.name || 'this Subject'} (${selectedCls?.name || 'this Class'}), ${formTerm} - ${formSession}.`);
+      setSaveError(`Error: A past question paper already exists in the archive for ${selectedSubj.name} (${selectedCls.name}), ${formTerm} - ${formSession}.`);
       return;
     }
 
@@ -195,11 +230,11 @@ export const PastQuestionsBank: React.FC = () => {
 
     const payload: Omit<CBTExam, 'id'> = {
       title: formTitle.trim(),
-      subjectId: formSubjectId,
-      subjectName: selectedSubj?.name || 'General',
-      classId: formClassId,
-      className: selectedCls?.name || 'SS 2',
-      teacherId: editingExamId ? editingExamTeacherId ?? matchedTeacher?.id : matchedTeacher?.id,
+      subjectId: selectedSubj.id,
+      subjectName: selectedSubj.name,
+      classId: selectedCls.id,
+      className: selectedCls.name,
+      teacherId: resolvedTeacherId,
       term: formTerm,
       session: formSession,
       durationMinutes: Number(formDurationMinutes),
@@ -225,11 +260,13 @@ export const PastQuestionsBank: React.FC = () => {
         return;
       }
 
-      alert(
-        editingExamId
+      setBannerNotice({
+        ok: true,
+        text: editingExamId
           ? 'Past Question Paper successfully updated!'
-          : 'New Past Question Paper successfully created and added to archive!'
-      );
+          : 'New Past Question Paper successfully created and added to archive!',
+      });
+      setTimeout(() => setBannerNotice(null), 5000);
       setIsAddModalOpen(false);
     } finally {
       setIsSaving(false);
@@ -252,7 +289,10 @@ export const PastQuestionsBank: React.FC = () => {
     });
 
     if (isAlreadyCloned) {
-      alert(`Error: A CBT exam for ${exam.subjectName} (${exam.className}) has already been cloned or deployed for the 3rd Term, 2025/2026. Double cloning of this paper is disallowed.`);
+      setBannerNotice({
+        ok: false,
+        text: `Error: A CBT exam for ${exam.subjectName} (${exam.className}) has already been cloned or deployed for the 3rd Term, 2025/2026.`,
+      });
       return;
     }
 
@@ -279,10 +319,14 @@ export const PastQuestionsBank: React.FC = () => {
 
     const result = await createCBTExam(payload);
     if (!result.ok) {
-      alert(result.error || 'Unable to deploy cloned CBT exam.');
+      setBannerNotice({ ok: false, text: result.error || 'Unable to deploy cloned CBT exam.' });
       return;
     }
-    alert(`Successfully deployed "${clonedTitle}" as an active CBT exam for students!`);
+    setBannerNotice({
+      ok: true,
+      text: `Successfully deployed "${clonedTitle}" as an active CBT exam for students!`,
+    });
+    setTimeout(() => setBannerNotice(null), 5000);
   };
 
   const handleTriggerPrint = () => {
@@ -315,6 +359,21 @@ export const PastQuestionsBank: React.FC = () => {
           <Plus className="w-4 h-4" /> Add Past Exam Paper
         </button>
       </div>
+
+      {bannerNotice && (
+        <div
+          className={`p-4 rounded-2xl border flex items-center justify-between gap-2 text-xs font-bold ${
+            bannerNotice.ok
+              ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+              : 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+          }`}
+        >
+          <span>{bannerNotice.text}</span>
+          <button type="button" onClick={() => setBannerNotice(null)} className="opacity-70 hover:opacity-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* FILTERS BAR: Class, Term, Session, Subject & Search */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm space-y-4">
@@ -769,15 +828,25 @@ export const PastQuestionsBank: React.FC = () => {
                   Target Class *
                 </label>
                 <select
+                  required
                   value={formClassId}
                   onChange={(e) => setFormClassId(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
                 >
-                  {classes.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {classes.length === 0 ? (
+                    <option value="">-- No classes available --</option>
+                  ) : (
+                    <>
+                      {!classes.some((c) => c.id === formClassId) && (
+                        <option value="">-- Select Target Class --</option>
+                      )}
+                      {classes.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -786,15 +855,25 @@ export const PastQuestionsBank: React.FC = () => {
                   Subject *
                 </label>
                 <select
+                  required
                   value={formSubjectId}
                   onChange={(e) => setFormSubjectId(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
                 >
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
+                  {subjects.length === 0 ? (
+                    <option value="">-- No subjects available --</option>
+                  ) : (
+                    <>
+                      {!subjects.some((s) => s.id === formSubjectId) && (
+                        <option value="">-- Select Subject --</option>
+                      )}
+                      {subjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
 

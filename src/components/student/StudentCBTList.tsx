@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student, CBTStartResponse } from '../../types';
+import { doesStudentClassMatch } from '../../lib/academicSelection';
 import { Clock, Play, CheckCircle2, AlertCircle, Calendar, Lock } from 'lucide-react';
 import { CBTExamRunner } from './CBTExamRunner';
 
@@ -12,9 +13,9 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
   const activeExamStorageKey = `cbt_active_exam_${student.id}`;
   const attemptedAutoResumeRef = React.useRef<boolean>(false);
 
-  // Available CBT exams for this student's class
+  // Available CBT exams for this student's class (exact match so SS 1 never matches JSS 1)
   const classExams = cbtExams.filter(
-    (e) => e.isPublished && (e.classId === student.classId || e.className.includes(student.className))
+    (e) => e.isPublished && doesStudentClassMatch(e.classId, e.className, student)
   );
 
   const clearActiveExamMarker = React.useCallback(() => {

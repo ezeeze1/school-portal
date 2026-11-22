@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { AttendanceRecord, Student } from '../../types';
-import { Save, CheckCircle2, Calendar, Users } from 'lucide-react';
+import { AttendanceRecord } from '../../types';
+import { resolveSyncedSelectionId } from '../../lib/academicSelection';
+import { Save, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export const AttendanceRecorder: React.FC = () => {
   const { students, classes, recordAttendance } = useSchool();
-  const [selectedClassId, setSelectedClassId] = useState<string>('c-ss2');
+  const [selectedClassId, setSelectedClassId] = useState<string>(() => classes[0]?.id || '');
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedClassId((prev) => resolveSyncedSelectionId(prev, classes));
+  }, [classes]);
 
   const classStudents = students.filter((s) => s.classId === selectedClassId);
 
@@ -27,8 +33,17 @@ export const AttendanceRecorder: React.FC = () => {
     setStatusMap(updated);
   };
 
-  const handleSaveAttendance = () => {
-    if (classStudents.length === 0) return;
+  const handleSaveAttendance = async () => {
+    setSaveError(null);
+    setSavedSuccess(false);
+    if (!selectedClassId || !classes.some((c) => c.id === selectedClassId)) {
+      setSaveError('Please select a valid class before submitting attendance.');
+      return;
+    }
+    if (classStudents.length === 0) {
+      setSaveError('No students enrolled in the selected class.');
+      return;
+    }
 
     const records: Omit<AttendanceRecord, 'id'>[] = classStudents.map((std) => ({
       studentId: std.id,
@@ -39,7 +54,11 @@ export const AttendanceRecorder: React.FC = () => {
       remark: remarksMap[std.id] || '',
     }));
 
-    recordAttendance(records);
+    const res = await recordAttendance(records);
+    if (!res.ok) {
+      setSaveError(res.error || 'Could not save daily attendance roll call.');
+      return;
+    }
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };
@@ -69,12 +88,23 @@ export const AttendanceRecorder: React.FC = () => {
             onChange={(e) => setSelectedClassId(e.target.value)}
             className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
           >
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
+            {classes.length === 0 ? (
+              <option value="">-- No classes available --</option>
+            ) : (
+              classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))
+            )}
           </select>
         </div>
       </div>
+
+      {saveError && (
+        <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-2xl flex items-center gap-2 text-xs font-bold">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{saveError}</span>
+        </div>
+      )}
 
       {savedSuccess && (
         <div className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl border border-emerald-300 dark:border-emerald-800 flex items-center gap-2 text-xs font-bold animate-fade-in">

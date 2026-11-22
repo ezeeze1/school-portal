@@ -85,6 +85,10 @@ import {
   normalizeAdmissionNumber,
   resolveStudentAdmissionNumber,
 } from '../lib/admissionNumber';
+import {
+  resolveMatchingTeacher,
+  validateAcademicEntityReferences,
+} from '../lib/academicSelection';
 
 interface SchoolContextType {
   // Auth & Session State
@@ -206,7 +210,9 @@ interface SchoolContextType {
     updated: Partial<Omit<SchoolClass, 'id'>>
   ) => Promise<{ ok: boolean; data?: SchoolClass; error?: string }>;
   deleteClass: (id: string) => Promise<{ ok: boolean; error?: string }>;
-  addSubject: (subj: Omit<Subject, 'id'>) => void;
+  addSubject: (
+    subj: Omit<Subject, 'id'>
+  ) => Promise<{ ok: boolean; data?: Subject; error?: string }>;
 
   // Score & Result Entry
   saveScore: (score: Omit<ScoreRecord, 'id'>) => void;
@@ -214,7 +220,9 @@ interface SchoolContextType {
   publishResult: (result: TerminalResult) => void;
 
   // Attendance
-  recordAttendance: (records: Omit<AttendanceRecord, 'id'>[]) => void;
+  recordAttendance: (
+    records: Omit<AttendanceRecord, 'id'>[]
+  ) => Promise<{ ok: boolean; error?: string }>;
 
   // CBT Exam & Server-Side Engine
   createCBTExam: (exam: Omit<CBTExam, 'id'>) => Promise<{ ok: boolean; error?: string }>;
@@ -235,8 +243,12 @@ interface SchoolContextType {
   ) => Promise<CBTSubmissionResponse>;
 
   // Assignments, Submissions & Notes
-  createAssignment: (asg: Omit<Assignment, 'id'>) => void;
-  addAssignment: (asg: Omit<Assignment, 'id'>) => void;
+  createAssignment: (
+    asg: Omit<Assignment, 'id'>
+  ) => Promise<{ ok: boolean; error?: string }>;
+  addAssignment: (
+    asg: Omit<Assignment, 'id'>
+  ) => Promise<{ ok: boolean; error?: string }>;
   deleteAssignment: (id: string) => void;
   submitAssignmentAnswer: (
     assignmentId: string,
@@ -248,8 +260,12 @@ interface SchoolContextType {
     grade: number | undefined,
     feedback: string | undefined
   ) => Promise<{ ok: boolean; error?: string }>;
-  createStudyNote: (note: Omit<StudyNote, 'id'>) => void;
-  addStudyNote: (note: Omit<StudyNote, 'id'>) => void;
+  createStudyNote: (
+    note: Omit<StudyNote, 'id'>
+  ) => Promise<{ ok: boolean; error?: string }>;
+  addStudyNote: (
+    note: Omit<StudyNote, 'id'>
+  ) => Promise<{ ok: boolean; error?: string }>;
   deleteStudyNote: (id: string) => void;
 
   // Website Content
@@ -1647,16 +1663,54 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return { ok: true };
   };
 
-  const addSubject = (subj: Omit<Subject, 'id'>) => {
+  const addSubject = async (
+    subj: Omit<Subject, 'id'>
+  ): Promise<{ ok: boolean; data?: Subject; error?: string }> => {
+    if (activeRole !== 'admin' || currentUser?.role !== 'admin') {
+      return { ok: false, error: 'Only an authenticated administrator can create subjects.' };
+    }
+    const cleanName = subj.name.trim().replace(/\s+/g, ' ');
+    const cleanCode = subj.code.trim().toUpperCase();
+    if (!cleanName || !cleanCode) {
+      return { ok: false, error: 'Subject name and subject code are required.' };
+    }
+
+    const dupCode = subjects.find((s) => s.code.trim().toUpperCase() === cleanCode);
+    if (dupCode) {
+      return { ok: false, error: `Subject code "${cleanCode}" is already used by ${dupCode.name}.` };
+    }
+    const dupName = subjects.find((s) => s.name.trim().toLowerCase() === cleanName.toLowerCase());
+    if (dupName) {
+      return { ok: false, error: `Subject "${dupName.name}" already exists.` };
+    }
+
     const id = `sub-${Date.now()}`;
-    const created = { ...subj, id };
+    const created: Subject = {
+      ...subj,
+      id,
+      name: cleanName,
+      code: cleanCode,
+    };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertSubject(created);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Could not save subject to Supabase.' };
+      }
+    }
+
     setSubjects((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertSubject(created);
+    return { ok: true, data: created };
   };
 
   const resolveValidTeacherId = (teacherId?: string): string | undefined => {
-    if (!teacherId) return undefined;
-    return teachers.some((t) => t.id === teacherId) ? teacherId : undefined;
+    if (teacherId && teachers.some((t) => t.id === teacherId)) {
+      return teacherId;
+    }
+    if (currentUser?.role === 'teacher') {
+      return resolveMatchingTeacher(currentUser, teachers)?.id;
+    }
+    return undefined;
   };
 
   const saveScore = (scoreData: Omit<ScoreRecord, 'id'>) => {
@@ -1710,13 +1764,35 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   };
 
-  const recordAttendance = (records: Omit<AttendanceRecord, 'id'>[]) => {
+  const recordAttendance = async (
+    records: Omit<AttendanceRecord, 'id'>[]
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (records.length === 0) {
+      return { ok: false, error: 'No students found to record attendance.' };
+    }
+
+    const sampleClassId = records[0].classId;
+    if (!classes.some((c) => c.id === sampleClassId)) {
+      return {
+        ok: false,
+        error: 'Selected class does not match any active class in Class Management.',
+      };
+    }
+
     const newRecords = records.map((r) => ({
       ...r,
       id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     }));
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertAttendanceBatch(newRecords);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Could not save attendance roll call to Supabase.' };
+      }
+    }
+
     setAttendance((prev) => [...prev, ...newRecords]);
-    void supabaseSchoolService.upsertAttendanceBatch(newRecords);
+    return { ok: true };
   };
 
   const localCbtSessionRef = useRef<
@@ -1738,11 +1814,32 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return { ok: false, error: validationError };
     }
 
+    const resolvedTeacherId = resolveValidTeacherId(exam.teacherId);
+    const refCheck = validateAcademicEntityReferences({
+      classId: exam.classId,
+      subjectId: exam.subjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'create a CBT examination',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      return {
+        ok: false,
+        error: refCheck.error || 'Please select a valid class and subject before saving.',
+      };
+    }
+
     const id = `cbt-${Date.now()}`;
     const created: CBTExam = {
       ...exam,
       id,
-      teacherId: resolveValidTeacherId(exam.teacherId),
+      classId: refCheck.matchedClass.id,
+      className: refCheck.matchedClass.name,
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      teacherId: resolvedTeacherId,
     };
 
     if (isSupabaseConfigured) {
@@ -1765,19 +1862,45 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return { ok: false, error: 'CBT exam not found.' };
     }
 
-    const next: CBTExam = {
+    const resolvedTeacherId =
+      'teacherId' in updated
+        ? resolveValidTeacherId(updated.teacherId)
+        : resolveValidTeacherId(existing.teacherId);
+
+    const nextCandidate: CBTExam = {
       ...existing,
       ...updated,
-      teacherId:
-        'teacherId' in updated
-          ? resolveValidTeacherId(updated.teacherId)
-          : resolveValidTeacherId(existing.teacherId),
+      teacherId: resolvedTeacherId,
     };
 
-    const validationError = validateExamQuestionsForSave(next.questions || []);
+    const validationError = validateExamQuestionsForSave(nextCandidate.questions || []);
     if (validationError) {
       return { ok: false, error: validationError };
     }
+
+    const refCheck = validateAcademicEntityReferences({
+      classId: nextCandidate.classId,
+      subjectId: nextCandidate.subjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'update this CBT examination',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      return {
+        ok: false,
+        error: refCheck.error || 'Please select a valid class and subject before saving.',
+      };
+    }
+
+    const next: CBTExam = {
+      ...nextCandidate,
+      classId: refCheck.matchedClass.id,
+      className: refCheck.matchedClass.name,
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+    };
 
     if (isSupabaseConfigured) {
       const res = await supabaseSchoolService.upsertCBTExam(next);
@@ -2002,15 +2125,46 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   };
 
-  const createAssignment = (asg: Omit<Assignment, 'id'>) => {
+  const createAssignment = async (
+    asg: Omit<Assignment, 'id'>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const resolvedTeacherId = resolveValidTeacherId(asg.teacherId);
+    const refCheck = validateAcademicEntityReferences({
+      classId: asg.classId,
+      subjectId: asg.subjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'post an assignment',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      return {
+        ok: false,
+        error: refCheck.error || 'Please select a valid class and subject before posting.',
+      };
+    }
+
     const id = `asg-${Date.now()}`;
     const created: Assignment = {
       ...asg,
       id,
-      teacherId: resolveValidTeacherId(asg.teacherId),
+      classId: refCheck.matchedClass.id,
+      className: refCheck.matchedClass.name,
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      teacherId: resolvedTeacherId,
     };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertAssignment(created);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Could not save assignment to Supabase.' };
+      }
+    }
+
     setAssignments((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertAssignment(created);
+    return { ok: true };
   };
 
   const deleteAssignment = (id: string) => {
@@ -2092,16 +2246,47 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return { ok: true };
   };
 
-  const createStudyNote = (note: Omit<StudyNote, 'id'>) => {
+  const createStudyNote = async (
+    note: Omit<StudyNote, 'id'>
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const resolvedTeacherId = resolveValidTeacherId(note.teacherId);
+    const refCheck = validateAcademicEntityReferences({
+      classId: note.classId,
+      subjectId: note.subjectId,
+      classes,
+      subjects,
+      allowAllClass: true,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'upload a study note',
+    });
+    if (!refCheck.ok || !refCheck.matchedSubject) {
+      return {
+        ok: false,
+        error: refCheck.error || 'Please select a valid subject before uploading.',
+      };
+    }
+
     const id = `note-${Date.now()}`;
     const created: StudyNote = {
       ...note,
       id,
-      classId: note.classId && note.classId !== 'all' ? note.classId : undefined,
-      teacherId: resolveValidTeacherId(note.teacherId),
+      classId: refCheck.matchedClass ? refCheck.matchedClass.id : undefined,
+      className: refCheck.matchedClass ? refCheck.matchedClass.name : 'All Classes',
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      teacherId: resolvedTeacherId,
     };
+
+    if (isSupabaseConfigured) {
+      const res = await supabaseSchoolService.upsertStudyNote(created);
+      if (!res.ok) {
+        return { ok: false, error: res.error || 'Could not save study note to Supabase.' };
+      }
+    }
+
     setStudyNotes((prev) => [...prev, created]);
-    void supabaseSchoolService.upsertStudyNote(created);
+    return { ok: true };
   };
 
   const deleteStudyNote = (id: string) => {

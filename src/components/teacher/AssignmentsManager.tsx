@@ -1,19 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Assignment, StudyNote } from '../../types';
-import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileCode, Paperclip, Download, Send, Users, Award, ExternalLink } from 'lucide-react';
+import {
+  resolveMatchingTeacher,
+  resolveSyncedSelectionId,
+  validateAcademicEntityReferences,
+} from '../../lib/academicSelection';
+import { BookOpen, Plus, FileText, Upload, Trash2, CheckCircle2, FileType, FileCode, Paperclip, Download, Send, Users, Award, ExternalLink, AlertCircle } from 'lucide-react';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 
 export const AssignmentsManager: React.FC = () => {
   const { assignments, assignmentSubmissions, gradeAssignmentSubmission, studyNotes, addAssignment, deleteAssignment, addStudyNote, deleteStudyNote, classes, subjects, teachers, currentUser } = useSchool();
-  const matchedTeacher =
-    currentUser?.role === 'teacher'
-      ? teachers.find(
-          (t) =>
-            t.id === currentUser.id ||
-            (currentUser.referenceId && t.staffId === currentUser.referenceId)
-        )
-      : undefined;
+  const matchedTeacher = resolveMatchingTeacher(currentUser, teachers);
   const resolvedTeacherId = matchedTeacher?.id;
   const resolvedTeacherName = matchedTeacher
     ? `${matchedTeacher.firstName} ${matchedTeacher.lastName}`
@@ -27,8 +25,8 @@ export const AssignmentsManager: React.FC = () => {
 
   // Assignment Form State
   const [asgTitle, setAsgTitle] = useState('');
-  const [asgClassId, setAsgClassId] = useState('c-ss2');
-  const [asgSubjId, setAsgSubjId] = useState('sub-mth');
+  const [asgClassId, setAsgClassId] = useState(() => classes[0]?.id || '');
+  const [asgSubjId, setAsgSubjId] = useState(() => subjects[0]?.id || '');
   const [asgDesc, setAsgDesc] = useState('');
   const [asgDueDate, setAsgDueDate] = useState('2026-08-30');
   const [asgFormat, setAsgFormat] = useState<'text' | 'word' | 'pdf'>('text');
@@ -37,17 +35,28 @@ export const AssignmentsManager: React.FC = () => {
   const [asgAttachmentUrl, setAsgAttachmentUrl] = useState('');
   const [asgFileSize, setAsgFileSize] = useState('');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Note Form State with Class Selection
   const [noteTitle, setNoteTitle] = useState('');
-  const [noteClassId, setNoteClassId] = useState('c-ss2');
-  const [noteSubjId, setNoteSubjId] = useState('sub-mth');
+  const [noteClassId, setNoteClassId] = useState(() => classes[0]?.id || 'all');
+  const [noteSubjId, setNoteSubjId] = useState(() => subjects[0]?.id || '');
   const [noteDesc, setNoteDesc] = useState('');
   const [noteAttachmentName, setNoteAttachmentName] = useState('');
   const [noteAttachmentUrl, setNoteAttachmentUrl] = useState('');
   const [noteFileSize, setNoteFileSize] = useState('');
   const [noteFilterClass, setNoteFilterClass] = useState('all');
   const [noteToDelete, setNoteToDelete] = useState<StudyNote | null>(null);
+
+  useEffect(() => {
+    setAsgClassId((prev) => resolveSyncedSelectionId(prev, classes));
+    setNoteClassId((prev) => resolveSyncedSelectionId(prev, classes, { allowAll: true }));
+  }, [classes]);
+
+  useEffect(() => {
+    setAsgSubjId((prev) => resolveSyncedSelectionId(prev, subjects));
+    setNoteSubjId((prev) => resolveSyncedSelectionId(prev, subjects));
+  }, [subjects]);
 
   // File Upload Handler for Lecture Notes
   const handleNoteFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -109,15 +118,27 @@ export const AssignmentsManager: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleCreateAssignment = (e: React.FormEvent) => {
+  const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!asgTitle.trim() || !asgDesc.trim()) {
-      alert('Please fill in assignment title and summary instructions.');
+      setFormError('Please fill in assignment title and summary instructions.');
       return;
     }
 
-    const subj = subjects.find((s) => s.id === asgSubjId);
-    const cls = classes.find((c) => c.id === asgClassId);
+    const refCheck = validateAcademicEntityReferences({
+      classId: asgClassId,
+      subjectId: asgSubjId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'post an assignment',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      setFormError(refCheck.error || 'Please select a valid Class and Subject.');
+      return;
+    }
 
     let defaultName = asgAttachmentName;
     if (!defaultName) {
@@ -128,10 +149,10 @@ export const AssignmentsManager: React.FC = () => {
 
     const newAsg: Omit<Assignment, 'id'> = {
       title: asgTitle.trim(),
-      subjectId: asgSubjId,
-      subjectName: subj?.name || 'Mathematics',
-      classId: asgClassId,
-      className: cls?.name || 'SS 2',
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      classId: refCheck.matchedClass.id,
+      className: refCheck.matchedClass.name,
       teacherId: resolvedTeacherId,
       teacherName: resolvedTeacherName,
       description: asgDesc.trim(),
@@ -145,7 +166,11 @@ export const AssignmentsManager: React.FC = () => {
       totalMarks: 20,
     };
 
-    addAssignment(newAsg);
+    const res = await addAssignment(newAsg);
+    if (!res.ok) {
+      setFormError(res.error || 'Unable to post assignment to Supabase.');
+      return;
+    }
     setAsgTitle('');
     setAsgDesc('');
     setAsgContent('');
@@ -156,22 +181,36 @@ export const AssignmentsManager: React.FC = () => {
     setTimeout(() => setSuccessMsg(null), 4000);
   };
 
-  const handleCreateNote = (e: React.FormEvent) => {
+  const handleCreateNote = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!noteTitle.trim()) {
-      alert('Please enter a lecture note title.');
+      setFormError('Please enter a lecture note title.');
       return;
     }
 
-    const subj = subjects.find((s) => s.id === noteSubjId);
-    const cls = classes.find((c) => c.id === noteClassId);
-    const targetClassName = noteClassId === 'all' ? 'All Classes' : (cls?.name || 'SS 2');
+    const refCheck = validateAcademicEntityReferences({
+      classId: noteClassId,
+      subjectId: noteSubjId,
+      classes,
+      subjects,
+      allowAllClass: true,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: 'upload a study note',
+    });
+    if (!refCheck.ok || !refCheck.matchedSubject) {
+      setFormError(refCheck.error || 'Please select a valid Subject before uploading.');
+      return;
+    }
+
+    const targetClassName = refCheck.matchedClass ? refCheck.matchedClass.name : 'All Classes';
 
     const newNote: Omit<StudyNote, 'id'> = {
       title: noteTitle.trim(),
-      subjectId: noteSubjId,
-      subjectName: subj?.name || 'Mathematics',
-      classId: noteClassId === 'all' ? undefined : noteClassId,
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      classId: refCheck.matchedClass ? refCheck.matchedClass.id : undefined,
       className: targetClassName,
       teacherId: resolvedTeacherId,
       teacherName: resolvedTeacherName,
@@ -181,7 +220,11 @@ export const AssignmentsManager: React.FC = () => {
       uploadDate: new Date().toISOString().split('T')[0],
     };
 
-    addStudyNote(newNote);
+    const res = await addStudyNote(newNote);
+    if (!res.ok) {
+      setFormError(res.error || 'Unable to publish lecture study note to Supabase.');
+      return;
+    }
     setNoteTitle('');
     setNoteDesc('');
     setNoteAttachmentName('');
@@ -263,6 +306,13 @@ export const AssignmentsManager: React.FC = () => {
               </h3>
             </div>
 
+            {formError && (
+              <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-3.5 rounded-2xl flex items-center gap-2 text-xs font-bold">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
+
             {successMsg && (
               <div className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-200 p-3.5 rounded-2xl border border-emerald-300 dark:border-emerald-800 flex items-center gap-2 text-xs font-bold animate-fade-in">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
@@ -334,22 +384,32 @@ export const AssignmentsManager: React.FC = () => {
                 <div>
                   <label className="block font-bold mb-1">Target Class *</label>
                   <select
+                    required
                     value={asgClassId}
                     onChange={(e) => setAsgClassId(e.target.value)}
                     className="w-full px-2.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white outline-none focus:border-amber-500"
                   >
-                    {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {classes.length === 0 ? (
+                      <option value="">-- No classes available --</option>
+                    ) : (
+                      classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)
+                    )}
                   </select>
                 </div>
 
                 <div>
                   <label className="block font-bold mb-1">Subject *</label>
                   <select
+                    required
                     value={asgSubjId}
                     onChange={(e) => setAsgSubjId(e.target.value)}
                     className="w-full px-2.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-900 dark:text-white outline-none focus:border-amber-500"
                   >
-                    {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {subjects.length === 0 ? (
+                      <option value="">-- No subjects available --</option>
+                    ) : (
+                      subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)
+                    )}
                   </select>
                 </div>
               </div>
@@ -653,6 +713,13 @@ export const AssignmentsManager: React.FC = () => {
               </h3>
             </div>
             
+            {formError && (
+              <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-3 rounded-2xl flex items-center gap-2 text-xs font-bold">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
+
             <div className="space-y-3.5 text-xs">
               <div>
                 <label className="block font-semibold mb-1 text-slate-700 dark:text-slate-300">
@@ -691,11 +758,16 @@ export const AssignmentsManager: React.FC = () => {
                   Subject <span className="text-rose-500">*</span>
                 </label>
                 <select
+                  required
                   value={noteSubjId}
                   onChange={(e) => setNoteSubjId(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium text-slate-900 dark:text-white"
                 >
-                  {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {subjects.length === 0 ? (
+                    <option value="">-- No subjects available --</option>
+                  ) : (
+                    subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)
+                  )}
                 </select>
               </div>
 

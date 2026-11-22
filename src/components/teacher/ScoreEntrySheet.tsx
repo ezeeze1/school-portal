@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { ScoreRecord, TerminalResult } from '../../types';
-import { Save, CheckCircle2 } from 'lucide-react';
+import {
+  resolveMatchingTeacher,
+  resolveSyncedSelectionId,
+  validateAcademicEntityReferences,
+} from '../../lib/academicSelection';
+import { Save, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export const ScoreEntrySheet: React.FC = () => {
   const {
@@ -18,9 +23,18 @@ export const ScoreEntrySheet: React.FC = () => {
     currentUser,
   } = useSchool();
 
-  const [selectedClassId, setSelectedClassId] = useState<string>(() => classes[0]?.id || 'c-ss2');
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(() => subjects[0]?.id || 'sub-mth');
+  const [selectedClassId, setSelectedClassId] = useState<string>(() => classes[0]?.id || '');
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(() => subjects[0]?.id || '');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedClassId((prev) => resolveSyncedSelectionId(prev, classes));
+  }, [classes]);
+
+  useEffect(() => {
+    setSelectedSubjectId((prev) => resolveSyncedSelectionId(prev, subjects));
+  }, [subjects]);
 
   // Filter students in selected class
   const classStudents = students.filter((s) => s.classId === selectedClassId);
@@ -106,17 +120,30 @@ export const ScoreEntrySheet: React.FC = () => {
   };
 
   const handleSaveAllScores = () => {
-    if (classStudents.length === 0) return;
+    setSaveError(null);
+    setSavedSuccess(false);
 
-    const matchedTeacher =
-      currentUser?.role === 'teacher'
-        ? teachers.find(
-            (t) =>
-              t.id === currentUser.id ||
-              (currentUser.referenceId && t.staffId === currentUser.referenceId)
-          )
-        : undefined;
+    const matchedTeacher = resolveMatchingTeacher(currentUser, teachers);
     const teacherId = matchedTeacher?.id;
+
+    const refCheck = validateAcademicEntityReferences({
+      classId: selectedClassId,
+      subjectId: selectedSubjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId: teacherId,
+      actionLabel: 'record subject scores',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      setSaveError(refCheck.error || 'Please select a valid Class and Subject before saving scores.');
+      return;
+    }
+    if (classStudents.length === 0) {
+      setSaveError('No students enrolled in the selected class.');
+      return;
+    }
+
     const recordsToSave: Omit<ScoreRecord, 'id'>[] = classStudents.map((std) => {
       const entry = localScores[std.id] || { ca1: 0, ca2: 0, exam: 0, remark: '' };
       const ca1 = Math.max(0, Math.min(20, Number(entry.ca1) || 0));
@@ -127,9 +154,9 @@ export const ScoreEntrySheet: React.FC = () => {
 
       return {
         studentId: std.id,
-        subjectId: selectedSubjectId,
-        subjectName: currentSubject?.name || 'Mathematics',
-        classId: selectedClassId,
+        subjectId: refCheck.matchedSubject!.id,
+        subjectName: refCheck.matchedSubject!.name,
+        classId: refCheck.matchedClass!.id,
         sessionId: systemSettings.currentSession,
         term: systemSettings.currentTerm,
         ca1Score: ca1,
@@ -270,9 +297,13 @@ export const ScoreEntrySheet: React.FC = () => {
             onChange={(e) => setSelectedClassId(e.target.value)}
             className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
           >
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
+            {classes.length === 0 ? (
+              <option value="">-- No classes available --</option>
+            ) : (
+              classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))
+            )}
           </select>
 
           <select
@@ -280,12 +311,23 @@ export const ScoreEntrySheet: React.FC = () => {
             onChange={(e) => setSelectedSubjectId(e.target.value)}
             className="px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
           >
-            {subjects.map((s) => (
-              <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
-            ))}
+            {subjects.length === 0 ? (
+              <option value="">-- No subjects available --</option>
+            ) : (
+              subjects.map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+              ))
+            )}
           </select>
         </div>
       </div>
+
+      {saveError && (
+        <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-2xl flex items-center gap-2 text-xs font-bold">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{saveError}</span>
+        </div>
+      )}
 
       {savedSuccess && (
         <div className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl border border-emerald-300 dark:border-emerald-800 flex items-center gap-2 text-xs font-bold animate-fade-in">

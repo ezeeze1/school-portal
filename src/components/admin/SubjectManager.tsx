@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Subject } from '../../types';
-import { BookOpen, Plus, Search, CheckCircle2, ShieldCheck, X, Filter } from 'lucide-react';
+import { BookOpen, Plus, Search, CheckCircle2, X, Filter, AlertCircle } from 'lucide-react';
 
 export const SubjectManager: React.FC = () => {
   const { subjects, addSubject } = useSchool();
@@ -10,6 +10,8 @@ export const SubjectManager: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [showAddModal, setShowAddModal] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
+  const [subjectError, setSubjectError] = useState<string | null>(null);
+  const [isSavingSubject, setIsSavingSubject] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -29,30 +31,42 @@ export const SubjectManager: React.FC = () => {
     return matchesSearch && matchesCategory;
   });
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingSubject) return;
+    setSubjectError(null);
     if (!formData.name.trim() || !formData.code.trim()) {
-      alert('Please provide both a Subject Name and Subject Code.');
+      setSubjectError('Please provide both a Subject Name and Subject Code.');
       return;
     }
 
-    addSubject({
-      name: formData.name.trim(),
-      code: formData.code.trim().toUpperCase(),
-      category: formData.category,
-      isCompulsory: formData.isCompulsory,
-    });
+    setIsSavingSubject(true);
+    try {
+      const res = await addSubject({
+        name: formData.name.trim(),
+        code: formData.code.trim().toUpperCase(),
+        category: formData.category,
+        isCompulsory: formData.isCompulsory,
+      });
 
-    setNotification(`Subject "${formData.name.trim()}" successfully added to curriculum!`);
-    setShowAddModal(false);
-    setFormData({
-      name: '',
-      code: '',
-      category: 'General',
-      isCompulsory: false,
-    });
+      if (!res.ok) {
+        setSubjectError(res.error || 'Could not save subject to Supabase.');
+        return;
+      }
 
-    setTimeout(() => setNotification(null), 4000);
+      setNotification(`Subject "${res.data?.name || formData.name.trim()}" successfully added to curriculum!`);
+      setShowAddModal(false);
+      setFormData({
+        name: '',
+        code: '',
+        category: 'General',
+        isCompulsory: false,
+      });
+
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setIsSavingSubject(false);
+    }
   };
 
   return (
@@ -186,7 +200,10 @@ export const SubjectManager: React.FC = () => {
                 <Plus className="w-5 h-5 text-purple-600" /> Add New Academic Subject
               </h3>
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={() => {
+                  setSubjectError(null);
+                  setShowAddModal(false);
+                }}
                 className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
               >
                 <X className="w-5 h-5" />
@@ -194,6 +211,12 @@ export const SubjectManager: React.FC = () => {
             </div>
 
             <form onSubmit={handleAddSubmit} className="space-y-4 text-xs">
+              {subjectError && (
+                <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-3 rounded-xl flex items-center gap-2 font-bold">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{subjectError}</span>
+                </div>
+              )}
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Subject Name *
@@ -263,9 +286,10 @@ export const SubjectManager: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-md"
+                  disabled={isSavingSubject}
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold shadow-md"
                 >
-                  Save Subject
+                  {isSavingSubject ? 'Saving...' : 'Save Subject'}
                 </button>
               </div>
             </form>

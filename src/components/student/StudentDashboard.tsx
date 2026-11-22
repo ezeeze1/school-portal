@@ -1,6 +1,7 @@
 import React from 'react';
 import { useSchool } from '../../context/SchoolContext';
 import { Student } from '../../types';
+import { doesStudentClassMatch } from '../../lib/academicSelection';
 import { Award, Clock, BookOpen, CheckCircle2, Calendar, Bell, ArrowRight } from 'lucide-react';
 
 export const StudentDashboard: React.FC<{ student: Student; onNavigate: (tab: string) => void }> = ({
@@ -11,7 +12,7 @@ export const StudentDashboard: React.FC<{ student: Student; onNavigate: (tab: st
 
   const latestResult = results.find((r) => r.studentId === student.id);
   const studentExams = cbtExams.filter(
-    (e) => e.isPublished && (e.classId === student.classId || e.className.includes(student.className))
+    (e) => e.isPublished && doesStudentClassMatch(e.classId, e.className, student)
   );
 
   return (

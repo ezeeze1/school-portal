@@ -41,6 +41,7 @@ import {
   isInternalStudentAuthEmail,
   makeAccountStatusKey,
 } from '../lib/accountProvisioning';
+import { formatAcademicPersistenceError } from '../lib/academicSelection';
 
 export interface SupabasePortalSnapshot {
   systemSettings?: SystemSessionTerm;
@@ -747,20 +748,24 @@ async function safeSelect<T>(
 async function safeUpsert(
   table: string,
   payload: Record<string, any> | Record<string, any>[],
-  onConflict = 'id'
+  onConflict = 'id',
+  errorFormatter?: (rawMessage: string, code?: string) => string
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabase) return { ok: false, error: 'Supabase not configured' };
   try {
     const { error } = await supabase.from(table).upsert(payload, { onConflict });
     if (error) {
       console.warn(`[Supabase] Upsert error on "${table}": ${error.message}`);
-      return { ok: false, error: error.message };
+      return {
+        ok: false,
+        error: errorFormatter ? errorFormatter(error.message, error.code) : error.message,
+      };
     }
     return { ok: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     console.warn(`[Supabase] Upsert exception on "${table}":`, err);
-    return { ok: false, error: msg };
+    return { ok: false, error: errorFormatter ? errorFormatter(msg) : msg };
   }
 }
 
@@ -2108,22 +2113,36 @@ export const supabaseSchoolService = {
     safeUpsert('classes', toClassRow(cls)),
 
   upsertSubject: (subject: Subject) =>
-    safeUpsert('subjects', toSubjectRow(subject)),
+    safeUpsert('subjects', toSubjectRow(subject), 'id', (msg, code) =>
+      formatAcademicPersistenceError('subject', msg, code)
+    ),
 
   upsertScore: (score: ScoreRecord) =>
-    safeUpsert('scores', toScoreRow(score)),
+    safeUpsert('scores', toScoreRow(score), 'id', (msg, code) =>
+      formatAcademicPersistenceError('score', msg, code)
+    ),
 
-  upsertScores: (scores: ScoreRecord[]) =>
-    scores.length > 0 ? safeUpsert('scores', scores.map(toScoreRow)) : Promise.resolve({ ok: true }),
+  upsertScores: (scores: ScoreRecord[]): Promise<{ ok: boolean; error?: string }> =>
+    scores.length > 0
+      ? safeUpsert('scores', scores.map(toScoreRow), 'id', (msg, code) =>
+          formatAcademicPersistenceError('score', msg, code)
+        )
+      : Promise.resolve({ ok: true }),
 
   upsertResult: (result: TerminalResult) =>
     safeUpsert('terminal_results', toResultRow(result)),
 
-  upsertAttendanceBatch: (records: AttendanceRecord[]) =>
-    records.length > 0 ? safeUpsert('attendance', records.map(toAttendanceRow)) : Promise.resolve({ ok: true }),
+  upsertAttendanceBatch: (records: AttendanceRecord[]): Promise<{ ok: boolean; error?: string }> =>
+    records.length > 0
+      ? safeUpsert('attendance', records.map(toAttendanceRow), 'id', (msg, code) =>
+          formatAcademicPersistenceError('attendance record', msg, code)
+        )
+      : Promise.resolve({ ok: true }),
 
   upsertCBTExam: (exam: CBTExam) =>
-    safeUpsert('cbt_exams', toCBTExamRow(exam)),
+    safeUpsert('cbt_exams', toCBTExamRow(exam), 'id', (msg, code) =>
+      formatAcademicPersistenceError('CBT exam', msg, code)
+    ),
 
   deleteCBTExam: async (id: string) => {
     await safeDeleteById('cbt_exams', id);
@@ -2145,7 +2164,9 @@ export const supabaseSchoolService = {
   },
 
   upsertAssignment: (assignment: Assignment) =>
-    safeUpsert('assignments', toAssignmentRow(assignment)),
+    safeUpsert('assignments', toAssignmentRow(assignment), 'id', (msg, code) =>
+      formatAcademicPersistenceError('assignment', msg, code)
+    ),
 
   deleteAssignment: (id: string) => safeDeleteById('assignments', id),
 
@@ -2195,7 +2216,9 @@ export const supabaseSchoolService = {
   },
 
   upsertStudyNote: (note: StudyNote) =>
-    safeUpsert('study_notes', toStudyNoteRow(note)),
+    safeUpsert('study_notes', toStudyNoteRow(note), 'id', (msg, code) =>
+      formatAcademicPersistenceError('study note', msg, code)
+    ),
 
   deleteStudyNote: (id: string) => safeDeleteById('study_notes', id),
 

@@ -10,6 +10,11 @@ import {
   validateExamQuestionsForSave,
 } from '../../lib/cbtShuffling';
 import {
+  resolveMatchingTeacher,
+  resolveSyncedSelectionId,
+  validateAcademicEntityReferences,
+} from '../../lib/academicSelection';
+import {
   Plus,
   Trash2,
   FileSpreadsheet,
@@ -164,14 +169,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     teachers,
     currentUser,
   } = useSchool();
-  const matchedTeacher =
-    currentUser?.role === 'teacher'
-      ? teachers.find(
-          (t) =>
-            t.id === currentUser.id ||
-            (currentUser.referenceId && t.staffId === currentUser.referenceId)
-        )
-      : undefined;
+  const matchedTeacher = resolveMatchingTeacher(currentUser, teachers);
   const [activeTab, setActiveTab] = useState<'list' | 'create' | 'import'>('list');
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
   const [activeSessionExamIds, setActiveSessionExamIds] = useState<string[]>([]);
@@ -232,13 +230,29 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
   // New / Editing Exam Form State
   const [title, setTitle] = useState('');
-  const [classId, setClassId] = useState('c-ss2');
-  const [subjectId, setSubjectId] = useState('sub-mth');
+  const [classId, setClassId] = useState(() => classes[0]?.id || '');
+  const [subjectId, setSubjectId] = useState(() => subjects[0]?.id || '');
   const [durationMinutes, setDurationMinutes] = useState(60);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('08:00');
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [allowAnswerReview, setAllowAnswerReview] = useState<boolean | undefined>(undefined);
+
+  useEffect(() => {
+    setClassId((prev) =>
+      resolveSyncedSelectionId(prev, classes, {
+        preserveExistingWhenEditing: Boolean(editingExamId),
+      })
+    );
+  }, [classes, editingExamId]);
+
+  useEffect(() => {
+    setSubjectId((prev) =>
+      resolveSyncedSelectionId(prev, subjects, {
+        preserveExistingWhenEditing: Boolean(editingExamId),
+      })
+    );
+  }, [subjects, editingExamId]);
 
   // Manual Questions List (new questions always default to correctOption: 'A')
   const [questions, setQuestions] = useState<CBTQuestion[]>([
@@ -279,8 +293,8 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setEditingExamTeacherId(undefined);
     setSaveError(null);
     setTitle('');
-    setClassId(classes[0]?.id || 'c-ss2');
-    setSubjectId(subjects[0]?.id || 'sub-mth');
+    setClassId(classes[0]?.id || '');
+    setSubjectId(subjects[0]?.id || '');
     setDurationMinutes(60);
     setStartDate(new Date().toISOString().split('T')[0]);
     setStartTime('08:00');
@@ -387,16 +401,33 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       marks: Number(q.marks) > 0 ? Number(q.marks) : 1,
     }));
 
-    const selectedSubj = subjects.find((s) => s.id === subjectId);
-    const selectedCls = classes.find((c) => c.id === classId);
+    const resolvedTeacherId = editingExamId
+      ? editingExamTeacherId ?? matchedTeacher?.id
+      : matchedTeacher?.id;
+
+    const refCheck = validateAcademicEntityReferences({
+      classId,
+      subjectId,
+      classes,
+      subjects,
+      currentUserRole: currentUser?.role,
+      resolvedTeacherId,
+      actionLabel: editingExamId ? 'update a CBT exam' : 'create a CBT exam',
+    });
+    if (!refCheck.ok || !refCheck.matchedClass || !refCheck.matchedSubject) {
+      setSaveError(
+        refCheck.error || 'Please select a valid Class and Subject before saving this CBT exam.'
+      );
+      return;
+    }
 
     const examPayload: Omit<CBTExam, 'id'> = {
       title: title.trim(),
-      subjectId,
-      subjectName: selectedSubj?.name || 'General',
-      classId,
-      className: selectedCls?.name || 'SS 2',
-      teacherId: editingExamId ? editingExamTeacherId ?? matchedTeacher?.id : matchedTeacher?.id,
+      subjectId: refCheck.matchedSubject.id,
+      subjectName: refCheck.matchedSubject.name,
+      classId: refCheck.matchedClass.id,
+      className: refCheck.matchedClass.name,
+      teacherId: resolvedTeacherId,
       durationMinutes: Number(durationMinutes),
       totalQuestions: normalizedQuestions.length,
       totalMarks: normalizedQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
@@ -687,6 +718,19 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             </div>
           )}
 
+          {(classes.length === 0 || subjects.length === 0) && (
+            <div className="bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 p-4 rounded-2xl text-xs font-semibold flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <span>
+                {classes.length === 0 && subjects.length === 0
+                  ? 'No active classes or subjects are available for your account yet. Ask an administrator to add subjects in Curriculum & Subject Manager and assign your classes/subjects.'
+                  : classes.length === 0
+                    ? 'No active classes are available for your account yet. Ask an administrator to create or assign classes in Class Management.'
+                    : 'No subjects are available for your account yet. Ask an administrator to add subjects in Curriculum & Subject Manager and link them to your faculty profile.'}
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
             <div className="sm:col-span-3">
               <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">CBT Exam Title *</label>
@@ -703,22 +747,46 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             <div>
               <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Target Class *</label>
               <select
+                required
                 value={classId}
                 onChange={(e) => setClassId(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
               >
-                {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {classes.length === 0 ? (
+                  <option value="">-- No classes available --</option>
+                ) : (
+                  <>
+                    {!classes.some((c) => c.id === classId) && (
+                      <option value="">-- Select Target Class --</option>
+                    )}
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
 
             <div>
               <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Subject *</label>
               <select
+                required
                 value={subjectId}
                 onChange={(e) => setSubjectId(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
               >
-                {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {subjects.length === 0 ? (
+                  <option value="">-- No subjects available --</option>
+                ) : (
+                  <>
+                    {!subjects.some((s) => s.id === subjectId) && (
+                      <option value="">-- Select Subject --</option>
+                    )}
+                    {subjects.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
 
