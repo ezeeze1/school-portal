@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSchool } from '../../context/SchoolContext';
-import { CBTExam, CBTQuestion, CBTAttempt } from '../../types';
+import { CBTExam, CBTExamSession, CBTQuestion, CBTAttempt } from '../../types';
 import { ConfirmDeleteModal } from '../common/ConfirmDeleteModal';
 import {
   TEACHER_OPTION_A_INSTRUCTION,
@@ -14,6 +14,11 @@ import {
   resolveSyncedSelectionId,
   validateAcademicEntityReferences,
 } from '../../lib/academicSelection';
+import {
+  classifyExamParticipation,
+  computeSafeExamEndDate,
+  validateCBTExamSchedule,
+} from '../../lib/cbtReliability';
 import {
   Plus,
   Trash2,
@@ -164,6 +169,9 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     deleteMultipleCBTExams,
     deleteCBTAttempt,
     getCBTActiveSessionExamIds,
+    getCBTExamSessions,
+    resetCBTExamSession,
+    students,
     classes,
     subjects,
     teachers,
@@ -172,6 +180,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   const matchedTeacher = resolveMatchingTeacher(currentUser, teachers);
   const [activeTab, setActiveTab] = useState<'list' | 'create' | 'import'>('list');
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
   const [activeSessionExamIds, setActiveSessionExamIds] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
@@ -209,32 +218,56 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       );
       return;
     }
-    if (
-      confirm(
-        `Are you sure you want to delete ${selectedExamIds.length} selected CBT exam paper(s)? This will also permanently delete all corresponding student results and attempts. This action cannot be undone.`
-      )
-    ) {
-      deleteMultipleCBTExams(selectedExamIds);
-      setSelectedExamIds([]);
-      setSaveSuccess('Selected CBT exam papers deleted successfully.');
-    }
+    setBulkDeleteConfirmOpen(true);
   };
 
   // Edit Mode state
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
   const [editingExamTeacherId, setEditingExamTeacherId] = useState<string | undefined>(undefined);
 
-  // View Results modal state
+  // View Results & Participation modal state
   const [viewingResultsExam, setViewingResultsExam] = useState<CBTExam | null>(null);
   const [viewingStudentScript, setViewingStudentScript] = useState<CBTAttempt | null>(null);
+  const [examSessions, setExamSessions] = useState<CBTExamSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [resultsSubTab, setResultsSubTab] = useState<
+    'submitted' | 'in_progress' | 'expired' | 'not_started'
+  >('submitted');
+
+  const loadSessionsForExam = useCallback(
+    async (examId: string) => {
+      setSessionsLoading(true);
+      try {
+        const list = await getCBTExamSessions(examId);
+        setExamSessions(list);
+      } finally {
+        setSessionsLoading(false);
+      }
+    },
+    [getCBTExamSessions]
+  );
+
+  useEffect(() => {
+    if (!viewingResultsExam) {
+      setExamSessions([]);
+      setResultsSubTab('submitted');
+      return;
+    }
+    void loadSessionsForExam(viewingResultsExam.id);
+  }, [viewingResultsExam, loadSessionsForExam]);
 
   // New / Editing Exam Form State
   const [title, setTitle] = useState('');
   const [classId, setClassId] = useState(() => classes[0]?.id || '');
   const [subjectId, setSubjectId] = useState(() => subjects[0]?.id || '');
   const [durationMinutes, setDurationMinutes] = useState(60);
+  const [passPercentage, setPassPercentage] = useState(50);
   const [startDate, setStartDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('08:00');
+  const [endDate, setEndDate] = useState(() =>
+    computeSafeExamEndDate(new Date().toISOString().split('T')[0], 30)
+  );
+  const [isPublished, setIsPublished] = useState(true);
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
   const [allowAnswerReview, setAllowAnswerReview] = useState<boolean | undefined>(undefined);
 
@@ -279,8 +312,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setClassId(exam.classId);
     setSubjectId(exam.subjectId);
     setDurationMinutes(exam.durationMinutes);
+    setPassPercentage(exam.passPercentage ?? 50);
     setStartDate(exam.startDate);
     setStartTime(exam.startTime || '08:00');
+    setEndDate(exam.endDate || computeSafeExamEndDate(exam.startDate, 30));
+    setIsPublished(exam.isPublished ?? true);
     setShuffleQuestions(exam.shuffleQuestions ?? true);
     setAllowAnswerReview(exam.allowAnswerReview);
     // Preserve existing question keys (including legacy B/C/D keys) without silent overwriting
@@ -289,6 +325,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   };
 
   const handleCancelEdit = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
     setEditingExamId(null);
     setEditingExamTeacherId(undefined);
     setSaveError(null);
@@ -296,8 +333,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setClassId(classes[0]?.id || '');
     setSubjectId(subjects[0]?.id || '');
     setDurationMinutes(60);
-    setStartDate(new Date().toISOString().split('T')[0]);
+    setPassPercentage(50);
+    setStartDate(todayStr);
     setStartTime('08:00');
+    setEndDate(computeSafeExamEndDate(todayStr, 30));
+    setIsPublished(true);
     setAllowAnswerReview(undefined);
     setQuestions([createBlankOptionAQuestion(`q-${Date.now()}-1`)]);
   };
@@ -387,6 +427,20 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       return;
     }
 
+    const effectiveStartDate = startDate || new Date().toISOString().split('T')[0];
+    const effectiveEndDate = endDate || computeSafeExamEndDate(effectiveStartDate, 30);
+
+    const scheduleError = validateCBTExamSchedule({
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      durationMinutes: Number(durationMinutes),
+      passPercentage: Number(passPercentage),
+    });
+    if (scheduleError) {
+      setSaveError(scheduleError);
+      return;
+    }
+
     const validationError = validateExamQuestionsForSave(questions);
     if (validationError) {
       setSaveError(validationError);
@@ -431,11 +485,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       durationMinutes: Number(durationMinutes),
       totalQuestions: normalizedQuestions.length,
       totalMarks: normalizedQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
-      passPercentage: 50,
-      startDate: startDate || new Date().toISOString().split('T')[0],
+      passPercentage: Number(passPercentage) || 50,
+      startDate: effectiveStartDate,
       startTime: startTime || '08:00',
-      endDate: '2026-12-31',
-      isPublished: true,
+      endDate: effectiveEndDate,
+      isPublished,
       shuffleQuestions,
       allowAnswerReview,
       questions: normalizedQuestions,
@@ -456,7 +510,9 @@ export const CBTQuestionBankBuilder: React.FC = () => {
       setSaveSuccess(
         editingExamId
           ? 'CBT Exam and questions successfully updated!'
-          : 'New CBT Exam successfully created and published!'
+          : isPublished
+          ? 'New CBT Exam successfully created and published!'
+          : 'CBT Exam saved as Draft (students cannot view until published).'
       );
       handleCancelEdit();
       setActiveTab('list');
@@ -609,9 +665,20 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                             className="mt-1 w-4 h-4 text-amber-500 border-slate-300 rounded focus:ring-amber-500 accent-amber-500 cursor-pointer"
                           />
                           <div>
-                            <span className="text-[10px] font-bold uppercase bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded">
-                              {exam.subjectName} ({exam.className})
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-[10px] font-bold uppercase bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded">
+                                {exam.subjectName} ({exam.className})
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                                  exam.isPublished
+                                    ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                                    : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                {exam.isPublished ? 'Published' : 'Draft'}
+                              </span>
+                            </div>
                             <h3 className="font-bold text-base text-slate-900 dark:text-white mt-1">
                               {exam.title}
                             </h3>
@@ -621,9 +688,9 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
                       <div className="text-xs text-slate-500 space-y-1">
                         <p>Questions: <strong>{exam.totalQuestions} Items</strong> ({exam.totalMarks} Total Marks)</p>
-                        <p>Duration: <strong>{exam.durationMinutes} Minutes</strong></p>
+                        <p>Duration: <strong>{exam.durationMinutes} Minutes</strong> • Pass: <strong>{exam.passPercentage ?? 50}%</strong></p>
                         <p className="text-purple-600 dark:text-purple-400 font-semibold pt-1">
-                          Start Date & Time: <strong>{exam.startDate} @ {exam.startTime || '08:00'}</strong>
+                          Window: <strong>{exam.startDate} @ {exam.startTime || '08:00'}</strong> to <strong>{exam.endDate}</strong>
                         </p>
                         {activeSessionExamIds.includes(exam.id) && (
                           <p className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded mt-1">
@@ -794,8 +861,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
               <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Duration (Minutes) *</label>
               <input
                 type="number"
+                min={1}
+                max={300}
+                required
                 value={durationMinutes}
-                onChange={(e) => setDurationMinutes(parseInt(e.target.value) || 10)}
+                onChange={(e) => setDurationMinutes(parseInt(e.target.value, 10) || 1)}
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl"
               />
             </div>
@@ -820,6 +890,43 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                 onChange={(e) => setStartTime(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
               />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Closing End Date *</label>
+              <input
+                type="date"
+                required
+                min={startDate || undefined}
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Pass Mark (%) *</label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                required
+                value={passPercentage}
+                onChange={(e) => setPassPercentage(parseInt(e.target.value, 10) || 50)}
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Visibility Status</label>
+              <select
+                value={isPublished ? 'published' : 'draft'}
+                onChange={(e) => setIsPublished(e.target.value === 'published')}
+                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
+              >
+                <option value="published">Published (Visible to Eligible Class)</option>
+                <option value="draft">Draft (Hidden from Students)</option>
+              </select>
             </div>
 
             <div>
@@ -1141,7 +1248,7 @@ export const CBTQuestionBankBuilder: React.FC = () => {
               </button>
             </div>
 
-            {/* Results summary stats */}
+            {/* Results & Live Participation Breakdown */}
             {(() => {
               const attempts = cbtAttempts.filter((a) => a.examId === viewingResultsExam.id);
               const totalAttempts = attempts.length;
@@ -1152,95 +1259,253 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                 ? Math.max(...attempts.map((a) => a.scoreObtained))
                 : 0;
 
+              const participation = classifyExamParticipation({
+                exam: viewingResultsExam,
+                students,
+                attempts: cbtAttempts,
+                sessions: examSessions,
+              });
+
               return (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-1">
-                      <span className="text-xs text-slate-500 font-bold uppercase">Total Submissions</span>
-                      <p className="font-serif font-black text-2xl text-slate-900 dark:text-white flex items-center gap-2">
-                        <UserCheck className="w-5 h-5 text-purple-500" /> {totalAttempts} Students
+                <div className="space-y-5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">Submitted</span>
+                      <p className="font-serif font-black text-xl text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4" /> {participation.submitted.length} / {participation.eligibleCount}
                       </p>
                     </div>
-                    <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-1">
-                      <span className="text-xs text-slate-500 font-bold uppercase">Class Average</span>
-                      <p className="font-serif font-black text-2xl text-amber-500 flex items-center gap-2">
-                        <BarChart2 className="w-5 h-5 text-amber-500" /> {avgScore}%
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">In Progress</span>
+                      <p className="font-serif font-black text-xl text-amber-500">
+                        {sessionsLoading ? '...' : participation.inProgress.length}
                       </p>
                     </div>
-                    <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-1">
-                      <span className="text-xs text-slate-500 font-bold uppercase">Highest Score</span>
-                      <p className="font-serif font-black text-2xl text-emerald-500 flex items-center gap-2">
-                        <Award className="w-5 h-5 text-emerald-500" /> {topScore} / {viewingResultsExam.totalMarks}
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">Class Average</span>
+                      <p className="font-serif font-black text-xl text-purple-500 flex items-center gap-1.5">
+                        <BarChart2 className="w-4 h-4" /> {avgScore}%
+                      </p>
+                    </div>
+                    <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">Highest Score</span>
+                      <p className="font-serif font-black text-xl text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <Award className="w-4 h-4 text-amber-500" /> {topScore} / {viewingResultsExam.totalMarks}
                       </p>
                     </div>
                   </div>
 
-                  {/* Table */}
-                  {totalAttempts === 0 ? (
-                    <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 space-y-2">
-                      <AlertCircle className="w-8 h-8 text-slate-400 mx-auto" />
-                      <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        No student attempts recorded yet for this CBT exam.
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Once students complete this test, their automatic marked scores will be listed here instantly.
-                      </p>
+                  {/* Participation Tabs */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-1.5 text-xs">
+                      {(
+                        [
+                          { id: 'submitted', label: `Submitted (${participation.submitted.length})` },
+                          { id: 'in_progress', label: `In Progress (${participation.inProgress.length})` },
+                          { id: 'expired', label: `Expired (${participation.expired.length})` },
+                          { id: 'not_started', label: `Not Started (${participation.notStarted.length})` },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setResultsSubTab(tab.id)}
+                          className={`px-3 py-1.5 rounded-xl font-bold transition-colors ${
+                            resultsSubTab === tab.id
+                              ? 'bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase font-bold text-[10px] tracking-wider">
-                          <tr>
-                            <th className="p-3.5">Student Name</th>
-                            <th className="p-3.5">Admission No.</th>
-                            <th className="p-3.5">Marked Score</th>
-                            <th className="p-3.5">Percentage</th>
-                            <th className="p-3.5">Time Taken</th>
-                            <th className="p-3.5">Completed Date</th>
-                            <th className="p-3.5 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium text-slate-800 dark:text-slate-200">
-                          {attempts.map((att) => (
-                            <tr key={att.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                              <td className="p-3.5 font-bold">{att.studentName}</td>
-                              <td className="p-3.5 font-mono text-slate-500">{att.admissionNo}</td>
-                              <td className="p-3.5">
-                                <span className="font-bold text-slate-900 dark:text-white">
-                                  {att.scoreObtained} / {att.totalMarks}
-                                </span>
-                              </td>
-                              <td className="p-3.5">
-                                <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300/30">
-                                  {att.percentage}%
-                                </span>
-                              </td>
-                              <td className="p-3.5 text-slate-500">
-                                {Math.floor(att.timeTakenSeconds / 60)}m {att.timeTakenSeconds % 60}s
-                              </td>
-                              <td className="p-3.5 text-slate-500">
-                                {new Date(att.completedAt).toLocaleDateString()} {new Date(att.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </td>
-                              <td className="p-3.5 text-right flex justify-end gap-2 items-center">
-                                <button
-                                  onClick={() => setViewingStudentScript(att)}
-                                  className="px-3 py-1.5 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold rounded-lg text-[11px] hover:opacity-90 transition-opacity whitespace-nowrap"
-                                >
-                                  View Script
-                                </button>
-                                <button
-                                  onClick={() => deleteCBTAttempt(att.id)}
-                                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-[11px] flex items-center gap-1 transition-colors whitespace-nowrap"
-                                  title="Reset student attempt to allow retake"
-                                >
-                                  <RotateCcw className="w-3.5 h-3.5" /> Allow Retake
-                                </button>
-                              </td>
+                    <button
+                      type="button"
+                      onClick={() => void loadSessionsForExam(viewingResultsExam.id)}
+                      disabled={sessionsLoading}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${sessionsLoading ? 'animate-spin' : ''}`} /> Refresh Sessions
+                    </button>
+                  </div>
+
+                  {resultsSubTab === 'submitted' && (
+                    totalAttempts === 0 ? (
+                      <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 space-y-2">
+                        <AlertCircle className="w-8 h-8 text-slate-400 mx-auto" />
+                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                          No student attempts recorded yet for this CBT exam.
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          Once students complete this test, their automatic marked scores will be listed here instantly.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-400 uppercase font-bold text-[10px] tracking-wider">
+                            <tr>
+                              <th className="p-3.5">Student Name</th>
+                              <th className="p-3.5">Admission No.</th>
+                              <th className="p-3.5">Marked Score</th>
+                              <th className="p-3.5">Percentage</th>
+                              <th className="p-3.5">Time Taken</th>
+                              <th className="p-3.5">Completed Date</th>
+                              <th className="p-3.5 text-right">Actions</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium text-slate-800 dark:text-slate-200">
+                            {attempts.map((att) => (
+                              <tr key={att.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                <td className="p-3.5 font-bold">{att.studentName}</td>
+                                <td className="p-3.5 font-mono text-slate-500">{att.admissionNo}</td>
+                                <td className="p-3.5">
+                                  <span className="font-bold text-slate-900 dark:text-white">
+                                    {att.scoreObtained} / {att.totalMarks}
+                                  </span>
+                                </td>
+                                <td className="p-3.5">
+                                  <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300/30">
+                                    {att.percentage}%
+                                  </span>
+                                </td>
+                                <td className="p-3.5 text-slate-500">
+                                  {Math.floor(att.timeTakenSeconds / 60)}m {att.timeTakenSeconds % 60}s
+                                </td>
+                                <td className="p-3.5 text-slate-500">
+                                  {new Date(att.completedAt).toLocaleDateString()} {new Date(att.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </td>
+                                <td className="p-3.5 text-right flex justify-end gap-2 items-center">
+                                  <button
+                                    onClick={() => setViewingStudentScript(att)}
+                                    className="px-3 py-1.5 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold rounded-lg text-[11px] hover:opacity-90 transition-opacity whitespace-nowrap"
+                                  >
+                                    View Script
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      deleteCBTAttempt(att.id);
+                                      void loadSessionsForExam(viewingResultsExam.id);
+                                    }}
+                                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-[11px] flex items-center gap-1 transition-colors whitespace-nowrap"
+                                    title="Reset student attempt to allow retake"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" /> Allow Retake
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  )}
+
+                  {resultsSubTab === 'in_progress' && (
+                    participation.inProgress.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl text-xs text-slate-500">
+                        No students are currently inside an active session for this exam.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 dark:bg-slate-800/80 text-slate-500 uppercase font-bold text-[10px]">
+                            <tr>
+                              <th className="p-3">Student</th>
+                              <th className="p-3">Admission No.</th>
+                              <th className="p-3">Started At</th>
+                              <th className="p-3">Expires At</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {participation.inProgress.map(({ student: st, session: sess }) => (
+                              <tr key={st.id}>
+                                <td className="p-3 font-bold">{st.firstName} {st.lastName}</td>
+                                <td className="p-3 font-mono text-slate-500">{st.admissionNo}</td>
+                                <td className="p-3 text-slate-500">{sess ? new Date(sess.startedAt).toLocaleTimeString() : '—'}</td>
+                                <td className="p-3 font-semibold text-amber-600 dark:text-amber-400">{sess ? new Date(sess.expiresAt).toLocaleTimeString() : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  )}
+
+                  {resultsSubTab === 'expired' && (
+                    participation.expired.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl text-xs text-slate-500">
+                        No expired unsubmitted sessions recorded for this exam.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 dark:bg-slate-800/80 text-slate-500 uppercase font-bold text-[10px]">
+                            <tr>
+                              <th className="p-3">Student</th>
+                              <th className="p-3">Admission No.</th>
+                              <th className="p-3">Expired At</th>
+                              <th className="p-3 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {participation.expired.map(({ student: st, session: sess }) => (
+                              <tr key={st.id}>
+                                <td className="p-3 font-bold">{st.firstName} {st.lastName}</td>
+                                <td className="p-3 font-mono text-slate-500">{st.admissionNo}</td>
+                                <td className="p-3 text-red-500">{sess ? new Date(sess.expiresAt).toLocaleString() : '—'}</td>
+                                <td className="p-3 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const res = await resetCBTExamSession(viewingResultsExam.id, st.id);
+                                      if (!res.ok) {
+                                        setSaveError(res.error || 'Could not reset expired session.');
+                                      } else {
+                                        await loadSessionsForExam(viewingResultsExam.id);
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[11px] inline-flex items-center gap-1"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" /> Reset Session
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  )}
+
+                  {resultsSubTab === 'not_started' && (
+                    participation.notStarted.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl text-xs text-slate-500">
+                        All eligible active students in {viewingResultsExam.className} have started or completed this exam.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl max-h-64 overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 dark:bg-slate-800/80 text-slate-500 uppercase font-bold text-[10px]">
+                            <tr>
+                              <th className="p-3">Student</th>
+                              <th className="p-3">Admission No.</th>
+                              <th className="p-3">Class / Arm</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {participation.notStarted.map(({ student: st }) => (
+                              <tr key={st.id}>
+                                <td className="p-3 font-bold">{st.firstName} {st.lastName}</td>
+                                <td className="p-3 font-mono text-slate-500">{st.admissionNo}</td>
+                                <td className="p-3 text-slate-500">{st.className} {st.arm}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
                   )}
                 </div>
               );
@@ -1377,6 +1642,21 @@ export const CBTQuestionBankBuilder: React.FC = () => {
         title="Confirm CBT Exam Deletion"
         message="Are you sure you want to delete this CBT Exam Paper and all associated questions?"
         itemName={examToDelete ? examToDelete.title : undefined}
+      />
+
+      {/* Confirmation Modal for Bulk CBT Exam Deletion */}
+      <ConfirmDeleteModal
+        isOpen={bulkDeleteConfirmOpen}
+        onClose={() => setBulkDeleteConfirmOpen(false)}
+        onConfirm={() => {
+          deleteMultipleCBTExams(selectedExamIds);
+          setSelectedExamIds([]);
+          setBulkDeleteConfirmOpen(false);
+          setSaveSuccess('Selected CBT exam papers deleted successfully.');
+        }}
+        title="Confirm Bulk CBT Deletion"
+        message={`Are you sure you want to permanently delete ${selectedExamIds.length} selected CBT exam paper(s) along with all corresponding student attempts?`}
+        itemName={`${selectedExamIds.length} CBT Examination(s)`}
       />
     </div>
   );

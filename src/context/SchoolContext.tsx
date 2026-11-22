@@ -12,6 +12,7 @@ import {
   TerminalResult,
   AttendanceRecord,
   CBTExam,
+  CBTExamSession,
   CBTAttempt,
   CBTStartResponse,
   CBTSubmissionResponse,
@@ -232,6 +233,8 @@ interface SchoolContextType {
   submitCBTAttempt: (attempt: Omit<CBTAttempt, 'id'>) => void;
   deleteCBTAttempt: (id: string) => void;
   getCBTActiveSessionExamIds: () => Promise<string[]>;
+  getCBTExamSessions: (examId: string) => Promise<CBTExamSession[]>;
+  resetCBTExamSession: (examId: string, studentId: string) => Promise<{ ok: boolean; error?: string }>;
   startCBTExamSession: (examId: string) => Promise<CBTStartResponse>;
   saveCBTExamDraftAnswers: (
     examId: string,
@@ -1947,6 +1950,32 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return supabaseSchoolService.getCBTActiveSessionExamIds();
   };
 
+  const getCBTExamSessions = async (examId: string): Promise<CBTExamSession[]> => {
+    if (!isSupabaseConfigured) {
+      return Object.entries(localCbtSessionRef.current)
+        .filter(([key]) => key.startsWith(`${examId}:`))
+        .map(([, entry]) => ({
+          id: entry.startResponse.sessionId,
+          examId,
+          studentId: entry.startResponse.sessionId.split('-')[2] || '',
+          startedAt: entry.startResponse.startedAt,
+          expiresAt: entry.startResponse.expiresAt,
+          status: 'in_progress' as const,
+          questionOrder: entry.startResponse.exam.questions.map((q) => q.id),
+        }));
+    }
+    return supabaseSchoolService.fetchCBTExamSessions(examId);
+  };
+
+  const resetCBTExamSession = async (
+    examId: string,
+    studentId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    delete localCbtSessionRef.current[`${examId}:${studentId}`];
+    if (!isSupabaseConfigured) return { ok: true };
+    return supabaseSchoolService.resetCBTExamSession(examId, studentId);
+  };
+
   const startCBTExamSession = async (examId: string): Promise<CBTStartResponse> => {
     if (!isSupabaseConfigured) {
       const localExam = cbtExams.find((e) => e.id === examId);
@@ -2504,6 +2533,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         submitCBTAttempt,
         deleteCBTAttempt,
         getCBTActiveSessionExamIds,
+        getCBTExamSessions,
+        resetCBTExamSession,
         startCBTExamSession,
         saveCBTExamDraftAnswers,
         submitCBTExamSession,

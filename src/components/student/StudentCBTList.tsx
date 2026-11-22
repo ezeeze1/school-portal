@@ -9,6 +9,7 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
   const { cbtExams, cbtAttempts, startCBTExamSession } = useSchool();
   const [activeSession, setActiveSession] = useState<CBTStartResponse | null>(null);
   const [startingExamId, setStartingExamId] = useState<string | null>(null);
+  const [isAutoResuming, setIsAutoResuming] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const activeExamStorageKey = `cbt_active_exam_${student.id}`;
   const attemptedAutoResumeRef = React.useRef<boolean>(false);
@@ -45,6 +46,7 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
         );
       } finally {
         setStartingExamId(null);
+        setIsAutoResuming(false);
       }
     },
     [activeExamStorageKey, clearActiveExamMarker, startCBTExamSession]
@@ -89,6 +91,7 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
       return;
     }
 
+    setIsAutoResuming(true);
     void handleStartExam(matchingExam.id);
   }, [
     activeExamStorageKey,
@@ -130,6 +133,13 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
               <Clock className="w-4 h-4" /> Auto-Timed & Instant Scoring
             </div>
           </div>
+
+          {isAutoResuming && (
+            <div className="bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 p-4 rounded-2xl text-xs font-bold flex items-center gap-2">
+              <Clock className="w-4 h-4 animate-spin flex-shrink-0" />
+              <span>Resuming your active CBT examination session and restoring saved answers...</span>
+            </div>
+          )}
 
           {startError && (
             <div className="bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 p-4 rounded-2xl text-xs font-bold flex items-center gap-2">
@@ -183,7 +193,8 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                       <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1.5">
                         <p className="flex items-center gap-1.5 text-purple-700 dark:text-purple-300 font-semibold">
                           <Calendar className="w-3.5 h-3.5 text-purple-500" />
-                          Start Date & Time: <strong className="font-bold">{exam.startDate} @ {exam.startTime || '08:00'}</strong>
+                          Window: <strong className="font-bold">{exam.startDate} @ {exam.startTime || '08:00'}</strong>
+                          {exam.endDate ? ` to ${exam.endDate}` : ''}
                         </p>
                         <p>Questions: <strong>{exam.totalQuestions} Questions</strong> ({exam.totalMarks} Marks)</p>
                       </div>
@@ -222,7 +233,7 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                             {isStarting
                               ? 'Starting Exam Session...'
                               : isInProgress
-                              ? 'Resume CBT Exam'
+                              ? `Resume CBT Exam${typeof exam.remainingSeconds === 'number' ? ` (${Math.max(1, Math.ceil(exam.remainingSeconds / 60))}m left)` : ''}`
                               : 'Start CBT Exam Now'}
                           </button>
                         )}
@@ -250,7 +261,7 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800 text-slate-500 uppercase text-[10px] font-bold">
-                      <th className="p-3">Exam ID</th>
+                      <th className="p-3">Examination</th>
                       <th className="p-3">Date Completed</th>
                       <th className="p-3 text-center">Score</th>
                       <th className="p-3 text-center">Percentage</th>
@@ -260,21 +271,33 @@ export const StudentCBTList: React.FC<{ student: Student }> = ({ student }) => {
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {cbtAttempts
                       .filter((a) => a.studentId === student.id)
-                      .map((attempt) => (
-                        <tr key={attempt.id}>
-                          <td className="p-3 font-mono text-slate-900 dark:text-white">{attempt.examId}</td>
-                          <td className="p-3 text-slate-500">{new Date(attempt.completedAt).toLocaleDateString()}</td>
-                          <td className="p-3 text-center font-bold">{attempt.scoreObtained} / {attempt.totalMarks}</td>
-                          <td className="p-3 text-center font-extrabold text-amber-500">{attempt.percentage}%</td>
-                          <td className="p-3 text-center">
-                            <span className={`px-2 py-0.5 rounded font-bold ${
-                              attempt.passed ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
-                            }`}>
-                              {attempt.passed ? 'PASSED' : 'FAILED'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      .map((attempt) => {
+                        const matchedExam = cbtExams.find((ex) => ex.id === attempt.examId);
+                        return (
+                          <tr key={attempt.id}>
+                            <td className="p-3">
+                              <p className="font-bold text-slate-900 dark:text-white">
+                                {matchedExam ? matchedExam.title : attempt.examId}
+                              </p>
+                              {matchedExam && (
+                                <p className="text-[11px] text-slate-500">
+                                  {matchedExam.subjectName}
+                                </p>
+                              )}
+                            </td>
+                            <td className="p-3 text-slate-500">{new Date(attempt.completedAt).toLocaleDateString()}</td>
+                            <td className="p-3 text-center font-bold">{attempt.scoreObtained} / {attempt.totalMarks}</td>
+                            <td className="p-3 text-center font-extrabold text-amber-500">{attempt.percentage}%</td>
+                            <td className="p-3 text-center">
+                              <span className={`px-2 py-0.5 rounded font-bold ${
+                                attempt.passed ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                              }`}>
+                                {attempt.passed ? 'PASSED' : 'FAILED'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                   </tbody>
                 </table>
               </div>

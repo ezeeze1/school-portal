@@ -14,6 +14,7 @@ import {
   resolveSyncedSelectionId,
   validateAcademicEntityReferences,
 } from '../../lib/academicSelection';
+import { computeSafeExamEndDate } from '../../lib/cbtReliability';
 import {
   BookOpen,
   Search,
@@ -228,6 +229,7 @@ export const PastQuestionsBank: React.FC = () => {
       marks: Number(q.marks) > 0 ? Number(q.marks) : 1,
     }));
 
+    const todayStr = new Date().toISOString().split('T')[0];
     const payload: Omit<CBTExam, 'id'> = {
       title: formTitle.trim(),
       subjectId: selectedSubj.id,
@@ -241,9 +243,9 @@ export const PastQuestionsBank: React.FC = () => {
       totalQuestions: normalizedQuestions.length,
       totalMarks: normalizedQuestions.reduce((acc, q) => acc + (q.marks || 1), 0),
       passPercentage: 50,
-      startDate: new Date().toISOString().split('T')[0],
+      startDate: todayStr,
       startTime: '08:00',
-      endDate: '2026-12-31',
+      endDate: computeSafeExamEndDate(todayStr, 60),
       isPublished: true,
       shuffleQuestions: true,
       questions: normalizedQuestions,
@@ -296,6 +298,7 @@ export const PastQuestionsBank: React.FC = () => {
       return;
     }
 
+    const cloneStartDate = new Date().toISOString().split('T')[0];
     const payload: Omit<CBTExam, 'id'> = {
       title: clonedTitle,
       subjectId: exam.subjectId,
@@ -308,10 +311,10 @@ export const PastQuestionsBank: React.FC = () => {
       durationMinutes: exam.durationMinutes,
       totalQuestions: exam.questions.length,
       totalMarks: exam.questions.reduce((acc, q) => acc + (q.marks || 1), 0),
-      passPercentage: 50,
-      startDate: new Date().toISOString().split('T')[0],
+      passPercentage: exam.passPercentage ?? 50,
+      startDate: cloneStartDate,
       startTime: '08:00',
-      endDate: '2026-08-30',
+      endDate: computeSafeExamEndDate(cloneStartDate, 60),
       isPublished: true,
       shuffleQuestions: true,
       questions: JSON.parse(JSON.stringify(exam.questions)),
@@ -1073,9 +1076,10 @@ export const PastQuestionsBank: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    if (confirm(`Are you sure you want to delete this past question paper? This cannot be undone.`)) {
-                      deleteCBTExam(editingExamId);
+                    const ex = cbtExams.find((e) => e.id === editingExamId);
+                    if (ex) {
                       setIsAddModalOpen(false);
+                      setExamToDelete(ex);
                     }
                   }}
                   className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors"

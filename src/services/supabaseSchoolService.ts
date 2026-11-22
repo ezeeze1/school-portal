@@ -9,6 +9,7 @@ import {
   TerminalResult,
   AttendanceRecord,
   CBTExam,
+  CBTExamSession,
   CBTAttempt,
   CBTStartResponse,
   CBTSubmissionResponse,
@@ -1261,6 +1262,39 @@ export const supabaseSchoolService = {
     }
   },
 
+  async fetchCBTExamSessions(examId: string): Promise<CBTExamSession[]> {
+    if (!supabase || !examId) return [];
+    try {
+      const { data, error } = await supabase
+        .from('cbt_exam_sessions')
+        .select('id, exam_id, student_id, started_at, expires_at, submitted_at, status, question_order')
+        .eq('exam_id', examId)
+        .order('started_at', { ascending: false });
+      if (error || !Array.isArray(data)) {
+        if (error) {
+          console.warn('[Supabase] Could not fetch CBT exam sessions:', error.message);
+        }
+        return [];
+      }
+      return data.map((row: Record<string, any>) => ({
+        id: String(row.id),
+        examId: String(row.exam_id),
+        studentId: String(row.student_id),
+        startedAt: String(row.started_at),
+        expiresAt: String(row.expires_at),
+        submittedAt: row.submitted_at ? String(row.submitted_at) : undefined,
+        status:
+          row.status === 'submitted' || row.status === 'expired'
+            ? row.status
+            : 'in_progress',
+        questionOrder: Array.isArray(row.question_order) ? row.question_order : [],
+      }));
+    } catch (err) {
+      console.warn('[Supabase] fetchCBTExamSessions error:', err);
+      return [];
+    }
+  },
+
   // Admin-only result passcode persistence
   upsertStudentResultPasscode: (studentId: string, resultPasscode: string) =>
     safeUpsert(
@@ -2160,6 +2194,29 @@ export const supabaseSchoolService = {
         .delete()
         .eq('exam_id', examId)
         .eq('student_id', studentId);
+    }
+  },
+
+  resetCBTExamSession: async (
+    examId: string,
+    studentId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!supabase) return { ok: true };
+    try {
+      const { error } = await supabase
+        .from('cbt_exam_sessions')
+        .delete()
+        .eq('exam_id', examId)
+        .eq('student_id', studentId);
+      if (error) {
+        return { ok: false, error: error.message || 'Unable to reset CBT exam session.' };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to reset CBT exam session.',
+      };
     }
   },
 
