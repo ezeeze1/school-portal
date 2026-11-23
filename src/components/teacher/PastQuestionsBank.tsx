@@ -15,6 +15,9 @@ import {
   validateAcademicEntityReferences,
 } from '../../lib/academicSelection';
 import { computeSafeExamEndDate } from '../../lib/cbtReliability';
+import { insertSnippetAtCursor } from '../../lib/mathFormatting';
+import { MathText } from '../common/MathText';
+import { MathSymbolToolbar, QuestionMathPreview } from './MathSymbolToolbar';
 import {
   BookOpen,
   Search,
@@ -70,6 +73,13 @@ export const PastQuestionsBank: React.FC = () => {
   const [formQuestions, setFormQuestions] = useState<CBTQuestion[]>([
     createBlankOptionAQuestion(`pq-${Date.now()}-1`),
   ]);
+  const [previewQuestionIds, setPreviewQuestionIds] = useState<Record<string, boolean>>({});
+  const [focusedMathTarget, setFocusedMathTarget] = useState<{
+    idx: number;
+    field: 'question' | 'A' | 'B' | 'C' | 'D' | 'explanation';
+    label: string;
+    el: HTMLInputElement | HTMLTextAreaElement | null;
+  } | null>(null);
 
   useEffect(() => {
     setFormClassId((prev) =>
@@ -649,10 +659,10 @@ export const PastQuestionsBank: React.FC = () => {
               {viewingExam.questions.map((q, idx) => (
                 <div key={q.id || idx} className="p-5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
                   <div className="flex justify-between items-start gap-2">
-                    <p className="font-bold text-slate-900 dark:text-white text-sm">
-                      Question #{idx + 1}. {q.question}
+                    <p className="font-bold text-slate-900 dark:text-white text-sm min-w-0 flex-1">
+                      Question #{idx + 1}. <MathText text={q.question} />
                     </p>
-                    <span className="font-bold text-amber-500 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded text-[10px]">
+                    <span className="font-bold text-amber-500 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded text-[10px] flex-shrink-0">
                       {q.marks || 1} Mark
                     </span>
                   </div>
@@ -663,17 +673,17 @@ export const PastQuestionsBank: React.FC = () => {
                       return (
                         <div
                           key={optKey}
-                          className={`p-3 rounded-xl border flex items-center justify-between font-medium ${
+                          className={`p-3 rounded-xl border flex items-center justify-between gap-2 font-medium min-w-0 ${
                             isCorrect
                               ? 'bg-emerald-100/70 dark:bg-emerald-950/60 border-emerald-400 text-emerald-900 dark:text-emerald-300 font-bold'
                               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                           }`}
                         >
-                          <span>
-                            <strong>{optKey}.</strong> {q.options[optKey]}
+                          <span className="min-w-0 flex-1">
+                            <strong>{optKey}.</strong> <MathText text={q.options[optKey]} />
                           </span>
                           {isCorrect && (
-                            <span className="text-[10px] font-bold uppercase bg-emerald-600 text-white px-2 py-0.5 rounded">
+                            <span className="text-[10px] font-bold uppercase bg-emerald-600 text-white px-2 py-0.5 rounded flex-shrink-0">
                               Correct Key
                             </span>
                           )}
@@ -684,7 +694,7 @@ export const PastQuestionsBank: React.FC = () => {
 
                   {q.explanation && (
                     <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-800 dark:text-amber-300">
-                      <strong>Solution / Explanation:</strong> {q.explanation}
+                      <strong>Solution / Explanation:</strong> <MathText text={q.explanation} />
                     </div>
                   )}
                 </div>
@@ -765,13 +775,13 @@ export const PastQuestionsBank: React.FC = () => {
               {printingExam.questions.map((q, idx) => (
                 <div key={q.id || idx} className="space-y-2">
                   <p className="font-bold text-sm">
-                    {idx + 1}. {q.question}
+                    {idx + 1}. <MathText text={q.question} />
                   </p>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-1 pl-4 font-medium">
-                    <span>(A) {q.options.A}</span>
-                    <span>(B) {q.options.B}</span>
-                    <span>(C) {q.options.C}</span>
-                    <span>(D) {q.options.D}</span>
+                    <span>(A) <MathText text={q.options.A} /></span>
+                    <span>(B) <MathText text={q.options.B} /></span>
+                    <span>(C) <MathText text={q.options.C} /></span>
+                    <span>(D) <MathText text={q.options.D} /></span>
                   </div>
                 </div>
               ))}
@@ -956,9 +966,50 @@ export const PastQuestionsBank: React.FC = () => {
               {formQuestions.map((q, idx) => {
                 const isLegacyKey = isLegacyNonOptionAQuestion(q);
                 const activeCorrectKey = q.correctOption || 'A';
+                const rowKey = q.id || `row-${idx}`;
+                const isPreviewOpen = Boolean(previewQuestionIds[rowKey]);
+                const activeLabelForRow =
+                  focusedMathTarget && focusedMathTarget.idx === idx
+                    ? focusedMathTarget.label
+                    : null;
+
+                const handleInsertForRow = (snippet: string) => {
+                  const target =
+                    focusedMathTarget && focusedMathTarget.idx === idx
+                      ? focusedMathTarget
+                      : { idx, field: 'question' as const, label: `Q${idx + 1} Question`, el: null };
+                  const currentVal =
+                    target.field === 'question'
+                      ? q.question
+                      : target.field === 'explanation'
+                      ? q.explanation || ''
+                      : q.options[target.field];
+                  const { nextValue, nextCursorPos } = insertSnippetAtCursor(
+                    currentVal,
+                    snippet,
+                    target.el?.selectionStart,
+                    target.el?.selectionEnd
+                  );
+                  if (target.field === 'question') {
+                    handleUpdateQuestionRow(idx, { question: nextValue });
+                  } else if (target.field === 'explanation') {
+                    handleUpdateQuestionRow(idx, { explanation: nextValue });
+                  } else {
+                    handleUpdateQuestionRow(idx, {
+                      options: { ...q.options, [target.field]: nextValue },
+                    });
+                  }
+                  if (target.el) {
+                    const el = target.el;
+                    requestAnimationFrame(() => {
+                      el.focus();
+                      el.setSelectionRange(nextCursorPos, nextCursorPos);
+                    });
+                  }
+                };
 
                 return (
-                  <div key={q.id || idx} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+                  <div key={rowKey} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
                     <div className="flex flex-wrap justify-between items-center gap-2">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-amber-500">Question #{idx + 1}</span>
@@ -992,10 +1043,27 @@ export const PastQuestionsBank: React.FC = () => {
                       </div>
                     </div>
 
+                    <MathSymbolToolbar
+                      activeFieldLabel={activeLabelForRow}
+                      onInsertSnippet={handleInsertForRow}
+                      showPreview={isPreviewOpen}
+                      onTogglePreview={() =>
+                        setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
+                      }
+                    />
+
                     <input
                       type="text"
                       required
                       value={q.question}
+                      onFocus={(e) =>
+                        setFocusedMathTarget({
+                          idx,
+                          field: 'question',
+                          label: `Question #${idx + 1}`,
+                          el: e.currentTarget,
+                        })
+                      }
                       onChange={(e) => handleUpdateQuestionRow(idx, { question: e.target.value })}
                       className="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
                       placeholder="Enter examination question..."
@@ -1027,6 +1095,14 @@ export const PastQuestionsBank: React.FC = () => {
                               type="text"
                               required
                               value={q.options[opt]}
+                              onFocus={(e) =>
+                                setFocusedMathTarget({
+                                  idx,
+                                  field: opt,
+                                  label: `Q#${idx + 1} Option ${opt}`,
+                                  el: e.currentTarget,
+                                })
+                              }
                               onChange={(e) =>
                                 handleUpdateQuestionRow(idx, {
                                   options: { ...q.options, [opt]: e.target.value },
@@ -1053,12 +1129,22 @@ export const PastQuestionsBank: React.FC = () => {
                         <input
                           type="text"
                           value={q.explanation || ''}
+                          onFocus={(e) =>
+                            setFocusedMathTarget({
+                              idx,
+                              field: 'explanation',
+                              label: `Q#${idx + 1} Explanation`,
+                              el: e.currentTarget,
+                            })
+                          }
                           onChange={(e) => handleUpdateQuestionRow(idx, { explanation: e.target.value })}
                           placeholder="Explanatory notes / solution..."
                           className="w-full p-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-xs"
                         />
                       </div>
                     </div>
+
+                    {isPreviewOpen && <QuestionMathPreview question={q} showExplanation />}
                   </div>
                 );
               })}

@@ -11,6 +11,7 @@ import {
   isTerminalCBTSessionError,
   summarizeSubmissionReadiness,
 } from '../../lib/cbtReliability';
+import { MathText } from '../common/MathText';
 import {
   Clock,
   AlertTriangle,
@@ -612,8 +613,8 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                     }`}
                   >
                     <div className="flex justify-between items-start gap-4">
-                      <span className="font-bold text-sm text-slate-200">
-                        Q{idx + 1}. {item.question}
+                      <span className="font-bold text-sm text-slate-200 min-w-0 flex-1">
+                        Q{idx + 1}. <MathText text={item.question} />
                       </span>
                       <span
                         className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
@@ -630,7 +631,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                       {(['A', 'B', 'C', 'D'] as const).map((opt) => (
                         <div
                           key={opt}
-                          className={`p-2.5 rounded-xl border ${
+                          className={`p-2.5 rounded-xl border min-w-0 flex items-start gap-1.5 ${
                             item.correctOption && opt === item.correctOption
                               ? 'bg-emerald-900/60 border-emerald-500 text-white font-bold'
                               : selectedOpt === opt
@@ -638,14 +639,18 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                               : 'bg-slate-800/50 border-slate-700 text-slate-400'
                           }`}
                         >
-                          {opt}. {item.options[opt]}
+                          <span className="flex-shrink-0">{opt}.</span>
+                          <span className="min-w-0 flex-1">
+                            <MathText text={item.options[opt]} />
+                          </span>
                         </div>
                       ))}
                     </div>
 
                     {item.explanation && (
                       <div className="p-3 bg-slate-800/70 border border-slate-700 rounded-xl text-xs text-amber-200">
-                        <strong className="text-amber-400">Explanation:</strong> {item.explanation}
+                        <strong className="text-amber-400">Explanation:</strong>{' '}
+                        <MathText text={item.explanation} />
                       </div>
                     )}
                   </div>
@@ -724,8 +729,8 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                 </button>
               </div>
 
-              <h3 className="font-serif font-bold text-lg sm:text-xl text-white leading-relaxed">
-                {currentQ.question}
+              <h3 className="font-serif font-bold text-lg sm:text-xl text-white leading-relaxed min-w-0">
+                <MathText text={currentQ.question} />
               </h3>
 
               {/* Options Selection */}
@@ -739,7 +744,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                       key={opt}
                       onClick={() => handleSelectOption(opt)}
                       disabled={isSubmitting}
-                      className={`w-full text-left p-4 rounded-2xl border text-sm font-medium transition-all flex items-center gap-3 ${
+                      className={`w-full text-left p-4 rounded-2xl border text-sm font-medium transition-all flex items-center gap-3 min-w-0 ${
                         isSelected
                           ? 'border-amber-400 bg-amber-500/10 text-white font-bold ring-2 ring-amber-400/50'
                           : 'border-slate-800 bg-slate-800/40 hover:bg-slate-800 text-slate-300'
@@ -754,7 +759,9 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                       >
                         {opt}
                       </span>
-                      <span>{currentQ.options[opt]}</span>
+                      <span className="min-w-0 flex-1 overflow-x-auto">
+                        <MathText text={currentQ.options[opt]} />
+                      </span>
                     </button>
                   );
                 })}

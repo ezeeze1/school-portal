@@ -20,6 +20,13 @@ import {
   validateCBTExamSchedule,
 } from '../../lib/cbtReliability';
 import {
+  insertSnippetAtCursor,
+  parseCsvLine,
+  stripMathForSpellCheck,
+} from '../../lib/mathFormatting';
+import { MathText } from '../common/MathText';
+import { MathSymbolToolbar, QuestionMathPreview } from './MathSymbolToolbar';
+import {
   Plus,
   Trash2,
   FileSpreadsheet,
@@ -76,8 +83,8 @@ const CBTQuestionSpellingHelper: React.FC<SpellingHelperProps> = ({ text, onCorr
 
   if (!text) return null;
 
-  // Split into words, remove punctuation but keep inner hyphens or apostrophes
-  const words = text
+  // Strip LaTeX/math notation before checking English spelling, then split into words
+  const words = stripMathForSpellCheck(text)
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"]/g, " ")
     .split(/\s+/)
     .map(w => w.trim())
@@ -296,6 +303,13 @@ export const CBTQuestionBankBuilder: React.FC = () => {
   const [csvText, setCsvText] = useState('');
   const [importedPreview, setImportedPreview] = useState<CBTQuestion[]>([]);
   const [examToDelete, setExamToDelete] = useState<CBTExam | null>(null);
+  const [previewQuestionIds, setPreviewQuestionIds] = useState<Record<string, boolean>>({});
+  const [focusedMathTarget, setFocusedMathTarget] = useState<{
+    idx: number;
+    field: 'question' | 'A' | 'B' | 'C' | 'D';
+    label: string;
+    el: HTMLInputElement | HTMLTextAreaElement | null;
+  } | null>(null);
 
   const handleEditExam = (exam: CBTExam) => {
     setSaveError(null);
@@ -371,14 +385,14 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     setQuestions((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // CSV Import Parser: supports Option-A-first 5/6 columns AND legacy 6/7-column format
+  // CSV Import Parser: quote-aware so commas inside math/coordinates stay intact
   const handleParseCsv = () => {
-    const lines = csvText.split('\n').filter((l) => l.trim().length > 0);
+    const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
     const parsed: CBTQuestion[] = [];
 
     lines.forEach((line, index) => {
       if (index === 0 && line.toLowerCase().includes('question')) return;
-      const parts = line.split(',').map((p) => p.trim().replace(/^"|"$/g, ''));
+      const parts = parseCsvLine(line);
       if (parts.length >= 5) {
         const col6Upper = (parts[5] || '').toUpperCase();
         const isLegacyExplicitKey = ['A', 'B', 'C', 'D'].includes(col6Upper);
@@ -975,10 +989,47 @@ export const CBTQuestionBankBuilder: React.FC = () => {
             {questions.map((q, idx) => {
               const isLegacyKey = isLegacyNonOptionAQuestion(q);
               const activeCorrectKey = q.correctOption || 'A';
+              const rowKey = q.id || `q-${idx}`;
+              const isPreviewOpen = Boolean(previewQuestionIds[rowKey]);
+              const activeLabelForRow =
+                focusedMathTarget && focusedMathTarget.idx === idx
+                  ? focusedMathTarget.label
+                  : null;
+
+              const handleInsertForQuestion = (snippet: string) => {
+                const target =
+                  focusedMathTarget && focusedMathTarget.idx === idx
+                    ? focusedMathTarget
+                    : { idx, field: 'question' as const, label: `Question #${idx + 1}`, el: null };
+                const currentVal =
+                  target.field === 'question' ? q.question : q.options[target.field];
+                const { nextValue, nextCursorPos } = insertSnippetAtCursor(
+                  currentVal,
+                  snippet,
+                  target.el?.selectionStart,
+                  target.el?.selectionEnd
+                );
+
+                if (target.field === 'question') {
+                  handleUpdateQuestion(idx, { question: nextValue });
+                } else {
+                  handleUpdateQuestion(idx, {
+                    options: { ...q.options, [target.field]: nextValue },
+                  });
+                }
+
+                if (target.el) {
+                  const el = target.el;
+                  requestAnimationFrame(() => {
+                    el.focus();
+                    el.setSelectionRange(nextCursorPos, nextCursorPos);
+                  });
+                }
+              };
 
               return (
                 <div
-                  key={q.id || idx}
+                  key={rowKey}
                   className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 text-xs"
                 >
                   <div className="flex flex-wrap justify-between items-center gap-2">
@@ -1015,6 +1066,15 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                     </div>
                   </div>
 
+                  <MathSymbolToolbar
+                    activeFieldLabel={activeLabelForRow}
+                    onInsertSnippet={handleInsertForQuestion}
+                    showPreview={isPreviewOpen}
+                    onTogglePreview={() =>
+                      setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
+                    }
+                  />
+
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                       Question *
@@ -1023,9 +1083,17 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                       rows={2}
                       required
                       value={q.question}
+                      onFocus={(e) =>
+                        setFocusedMathTarget({
+                          idx,
+                          field: 'question',
+                          label: `Question #${idx + 1}`,
+                          el: e.currentTarget,
+                        })
+                      }
                       onChange={(e) => handleUpdateQuestion(idx, { question: e.target.value })}
                       className="w-full p-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium resize-y outline-none focus:ring-2 focus:ring-amber-500/20"
-                      placeholder="Enter examination question..."
+                      placeholder="Enter examination question (supports Unicode & LaTeX)..."
                       spellCheck={true}
                     />
                   </div>
@@ -1075,6 +1143,14 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                             type="text"
                             required
                             value={q.options[opt]}
+                            onFocus={(e) =>
+                              setFocusedMathTarget({
+                                idx,
+                                field: opt,
+                                label: `Q#${idx + 1} Option ${opt}`,
+                                el: e.currentTarget,
+                              })
+                            }
                             onChange={(e) =>
                               handleUpdateQuestion(idx, {
                                 options: { ...q.options, [opt]: e.target.value },
@@ -1092,6 +1168,8 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                       );
                     })}
                   </div>
+
+                  {isPreviewOpen && <QuestionMathPreview question={q} />}
 
                   <div className="flex flex-wrap gap-4 items-center pt-2">
                     {isLegacyKey && (
@@ -1218,6 +1296,40 @@ export const CBTQuestionBankBuilder: React.FC = () => {
               </button>
             )}
           </div>
+
+          {importedPreview.length > 0 && (
+            <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+              <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500">
+                Imported Questions Math Preview ({importedPreview.length})
+              </h4>
+              <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                {importedPreview.map((pq, pIdx) => (
+                  <div
+                    key={pq.id || pIdx}
+                    className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2 text-xs"
+                  >
+                    <p className="font-bold text-slate-900 dark:text-white">
+                      Q{pIdx + 1}. <MathText text={pq.question} />
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px]">
+                      {(['A', 'B', 'C', 'D'] as const).map((opt) => (
+                        <div
+                          key={opt}
+                          className={`p-2 rounded-lg border ${
+                            (pq.correctOption || 'A') === opt
+                              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold'
+                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          <strong>{opt}.</strong> <MathText text={pq.options[opt]} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1564,11 +1676,11 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                     }`}
                   >
                     <div className="flex justify-between items-start gap-2">
-                      <p className="font-bold text-slate-200">
-                        Q{idx + 1}. {q.question}
+                      <p className="font-bold text-slate-200 min-w-0 flex-1">
+                        Q{idx + 1}. <MathText text={q.question} />
                       </p>
                       <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold flex-shrink-0 ${
                           isCorrect
                             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                             : 'bg-red-500/20 text-red-400 border border-red-500/30'
@@ -1594,13 +1706,13 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                         return (
                           <div
                             key={optKey}
-                            className={`p-2.5 rounded-xl border flex items-center justify-between text-[11px] ${optionBg}`}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] min-w-0 ${optionBg}`}
                           >
-                            <span>
-                              <strong>{optKey}.</strong> {optionText}
+                            <span className="min-w-0 flex-1">
+                              <strong>{optKey}.</strong> <MathText text={optionText} />
                             </span>
                             {isStudentChoice && (
-                              <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-900 text-white">
+                              <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-900 text-white flex-shrink-0">
                                 Student Answer
                               </span>
                             )}
