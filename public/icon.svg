@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Rounded Crest Base -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect x="20" y="20" width="472" height="472" rx="96" fill="none" stroke="url(#goldGrad)" stroke-width="8" stroke-opacity="0.35" />
+
+  <!-- Academic Shield Silhouette -->
+  <path
+    d="M256 68 L412 118 V246 C412 346 344 414 256 446 C168 414 100 346 100 246 V118 Z"
+    fill="#1e293b"
+    fill-opacity="0.65"
+    stroke="url(#goldGrad)"
+    stroke-width="14"
+    stroke-linejoin="round"
+  />
+
+  <!-- Graduation Cap / Wisdom Crest Top Accent -->
+  <polygon points="256,112 328,142 256,172 184,142" fill="url(#goldGrad)" />
+  <path d="M214 157 V182 C214 194 234 202 256 202 C278 202 298 194 298 182 V157" fill="none" stroke="#fbbf24" stroke-width="8" stroke-linecap="round" />
+
+  <!-- Bold Monogram: DA -->
+  <text
+    x="256"
+    y="328"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-weight="900"
+    font-size="144"
+    letter-spacing="4"
+    fill="url(#goldGrad)"
+  >DA</text>
+
+  <!-- Bottom Motto Ribbon Bar -->
+  <rect x="172" y="356" width="168" height="10" rx="5" fill="#fbbf24" fill-opacity="0.85" />
+</svg>

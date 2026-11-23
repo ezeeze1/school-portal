@@ -58,6 +58,8 @@ export const GalleryPage: React.FC = () => {
             <img
               src={img.imageUrl}
               alt={img.title}
+              loading="lazy"
+              decoding="async"
               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent opacity-90 group-hover:opacity-100 transition-opacity p-4 flex flex-col justify-end text-white space-y-1">
@@ -81,7 +83,7 @@ export const GalleryPage: React.FC = () => {
             >
               <X className="w-6 h-6" />
             </button>
-            <img src={lightboxImage.imageUrl} alt={lightboxImage.title} className="w-full h-[450px] object-cover" />
+            <img src={lightboxImage.imageUrl} alt={lightboxImage.title} className="w-full h-60 sm:h-96 md:h-[450px] object-cover" />
             <div className="p-6 space-y-2">
               <span className="text-amber-400 font-bold text-xs uppercase tracking-wider">{lightboxImage.category}</span>
               <h2 className="font-serif font-bold text-2xl">{lightboxImage.title}</h2>

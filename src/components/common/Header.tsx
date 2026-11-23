@@ -24,6 +24,7 @@ import {
   Send
 } from 'lucide-react';
 import { LoginModal } from '../auth/LoginModal';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const Header: React.FC = () => {
   const { currentUser, activeRole, authLoading, logout, currentView, setCurrentView, systemSettings } = useSchool();
@@ -75,27 +76,28 @@ export const Header: React.FC = () => {
           <span className="hidden sm:inline bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border border-slate-700">
             Active: {systemSettings.currentSession} ({systemSettings.currentTerm})
           </span>
+          <PWAInstallButton variant="mobileBar" />
 
           {/* Quick Portal Direct Login Chips Hidden */}
         </div>
       </div>
 
       {/* Main Branding & Navigation Row */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-2 sm:gap-4">
         
         {/* Brand Logo & Name */}
         <div
           onClick={() => handleNavClick('home')}
-          className="flex items-center gap-3 cursor-pointer group"
+          className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group min-w-0"
         >
-          <div className="w-12 h-12 rounded-2xl bg-slate-900 dark:bg-amber-500 text-amber-400 dark:text-slate-950 flex items-center justify-center font-serif font-black text-xl shadow-lg group-hover:scale-105 transition-transform px-1 truncate select-none">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 rounded-2xl bg-slate-900 dark:bg-amber-500 text-amber-400 dark:text-slate-950 flex items-center justify-center font-serif font-black text-lg sm:text-xl shadow-lg group-hover:scale-105 transition-transform px-1 truncate select-none">
             {systemSettings.schoolLogoText || 'DA'}
           </div>
-          <div>
-            <h1 className="font-serif font-bold text-sm sm:text-base text-slate-900 dark:text-white leading-snug tracking-tight uppercase max-w-[200px] sm:max-w-xs md:max-w-md truncate">
+          <div className="min-w-0">
+            <h1 className="font-serif font-bold text-xs sm:text-base text-slate-900 dark:text-white leading-snug tracking-tight uppercase max-w-[150px] sm:max-w-xs md:max-w-md truncate">
               {systemSettings.schoolName || 'Divine Academy Secondary School'}
             </h1>
-            <p className="text-[10px] sm:text-[11px] text-amber-600 dark:text-amber-400 font-bold tracking-wide italic truncate">
+            <p className="text-[10px] sm:text-[11px] text-amber-600 dark:text-amber-400 font-bold tracking-wide italic truncate max-w-[150px] sm:max-w-xs">
               "{systemSettings.schoolMotto || 'Excellent of Divine Wisdom'}"
             </p>
           </div>
@@ -119,8 +121,9 @@ export const Header: React.FC = () => {
         </nav>
 
         {/* Action Buttons & User Menu */}
-        <div className="flex items-center gap-3">
-          
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <PWAInstallButton variant="header" />
+
           <button
             onClick={() => handleNavClick('apply')}
             className="hidden sm:inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 px-4 py-2 rounded-xl font-bold text-sm transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
@@ -237,6 +240,7 @@ export const Header: React.FC = () => {
             </button>
           ))}
           <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+            <PWAInstallButton variant="mobile" />
             <button
               onClick={() => handleNavClick('apply')}
               className="w-full bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl text-sm"

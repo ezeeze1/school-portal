@@ -12,6 +12,7 @@ import {
   summarizeSubmissionReadiness,
 } from '../../lib/cbtReliability';
 import { MathText } from '../common/MathText';
+import { formatFriendlyNetworkError } from '../../lib/pwaProtection';
 import {
   Clock,
   AlertTriangle,
@@ -320,8 +321,13 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
           // Ignore storage errors
         }
       } catch (err: any) {
-        const errMessage =
-          err?.message || 'Unable to submit exam answers to the server. Please retry.';
+        const rawMessage = err?.message || '';
+        const errMessage = isTerminalCBTSessionError(rawMessage)
+          ? rawMessage
+          : formatFriendlyNetworkError(
+              err,
+              'Unable to submit exam answers to the server. Please retry.'
+            );
         setSubmitError(errMessage);
         if (isTerminalCBTSessionError(errMessage)) {
           try {
@@ -386,7 +392,10 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
   const isTerminalSubmitFailure = isTerminalCBTSessionError(submitError);
 
   return (
-    <div className="bg-slate-950 text-white min-h-screen p-4 sm:p-8 space-y-6">
+    <div
+      data-cbt-exam-active={!isExamCompleted ? 'true' : 'false'}
+      className="bg-slate-950 text-white min-h-screen p-3 sm:p-8 space-y-5 sm:space-y-6"
+    >
       {/* Top Examination Control Bar */}
       <div className="max-w-6xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex items-center gap-3">
@@ -744,7 +753,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                       key={opt}
                       onClick={() => handleSelectOption(opt)}
                       disabled={isSubmitting}
-                      className={`w-full text-left p-4 rounded-2xl border text-sm font-medium transition-all flex items-center gap-3 min-w-0 ${
+                      className={`w-full text-left p-3.5 sm:p-4 min-h-[52px] rounded-2xl border text-sm font-medium transition-all flex items-center gap-3 min-w-0 touch-manipulation ${
                         isSelected
                           ? 'border-amber-400 bg-amber-500/10 text-white font-bold ring-2 ring-amber-400/50'
                           : 'border-slate-800 bg-slate-800/40 hover:bg-slate-800 text-slate-300'

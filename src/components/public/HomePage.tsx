@@ -61,10 +61,10 @@ export const HomePage: React.FC = () => {
             </div>
 
             {/* Accreditations badge list */}
-            <div className="pt-6 border-t border-slate-800 flex items-center justify-center lg:justify-start gap-6 text-slate-400 text-xs font-semibold">
+            <div className="pt-6 border-t border-slate-800 flex flex-wrap items-center justify-center lg:justify-start gap-x-6 gap-y-2 text-slate-400 text-xs font-semibold">
               <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-emerald-400" /> WASSCE Accredited</span>
               <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-emerald-400" /> IGCSE Cambridge Center</span>
-              <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-emerald-400" /> NECO & BECE</span>
+              <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-emerald-400" /> NECO &amp; BECE</span>
             </div>
           </div>
 
@@ -75,6 +75,7 @@ export const HomePage: React.FC = () => {
                 src={systemSettings.heroImage || "https://i.ibb.co/B2GJ0CSS/Divine5.jpg"}
                 alt={systemSettings.schoolName || "Divine Academy Students"}
                 referrerPolicy="no-referrer"
+                decoding="async"
                 className="w-full h-80 sm:h-96 lg:h-[440px] object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-transparent" />

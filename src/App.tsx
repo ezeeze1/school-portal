@@ -1,26 +1,71 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { SchoolProvider, useSchool } from './context/SchoolContext';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
 import { WhatsAppButton } from './components/common/WhatsAppButton';
+import { PWAConnectivityAndUpdateBar } from './components/common/PWAConnectivityAndUpdateBar';
 import { CheckCircle2, AlertCircle, ShieldAlert, LogOut } from 'lucide-react';
 import { isPasswordValidationFailure, validatePortalPassword } from './lib/accountProvisioning';
 
-// Public Pages
+// Keep HomePage eager for instant first-paint performance
 import { HomePage } from './components/public/HomePage';
-import { AboutPage } from './components/public/AboutPage';
-import { AdmissionsPage } from './components/public/AdmissionsPage';
-import { NewsEventsPage } from './components/public/NewsEventsPage';
-import { GalleryPage } from './components/public/GalleryPage';
-import { ContactPage } from './components/public/ContactPage';
-import { OnlineApplicationPage } from './components/public/OnlineApplicationPage';
-import { EmploymentPage } from './components/public/EmploymentPage';
 
-// Role Portals
-import { StudentPortalLayout } from './components/student/StudentPortalLayout';
-import { TeacherPortalLayout } from './components/teacher/TeacherPortalLayout';
-import { ParentPortalLayout } from './components/parent/ParentPortalLayout';
-import { AdminPortalLayout } from './components/admin/AdminPortalLayout';
+// Lazy-load secondary public pages & heavy role portals for faster mobile startup
+const AboutPage = lazy(() =>
+  import('./components/public/AboutPage').then((m) => ({ default: m.AboutPage }))
+);
+const AdmissionsPage = lazy(() =>
+  import('./components/public/AdmissionsPage').then((m) => ({ default: m.AdmissionsPage }))
+);
+const NewsEventsPage = lazy(() =>
+  import('./components/public/NewsEventsPage').then((m) => ({ default: m.NewsEventsPage }))
+);
+const GalleryPage = lazy(() =>
+  import('./components/public/GalleryPage').then((m) => ({ default: m.GalleryPage }))
+);
+const ContactPage = lazy(() =>
+  import('./components/public/ContactPage').then((m) => ({ default: m.ContactPage }))
+);
+const OnlineApplicationPage = lazy(() =>
+  import('./components/public/OnlineApplicationPage').then((m) => ({
+    default: m.OnlineApplicationPage,
+  }))
+);
+const EmploymentPage = lazy(() =>
+  import('./components/public/EmploymentPage').then((m) => ({ default: m.EmploymentPage }))
+);
+
+const StudentPortalLayout = lazy(() =>
+  import('./components/student/StudentPortalLayout').then((m) => ({
+    default: m.StudentPortalLayout,
+  }))
+);
+const TeacherPortalLayout = lazy(() =>
+  import('./components/teacher/TeacherPortalLayout').then((m) => ({
+    default: m.TeacherPortalLayout,
+  }))
+);
+const ParentPortalLayout = lazy(() =>
+  import('./components/parent/ParentPortalLayout').then((m) => ({
+    default: m.ParentPortalLayout,
+  }))
+);
+const AdminPortalLayout = lazy(() =>
+  import('./components/admin/AdminPortalLayout').then((m) => ({
+    default: m.AdminPortalLayout,
+  }))
+);
+
+const PortalViewFallback: React.FC = () => (
+  <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-10 text-center space-y-3 shadow-sm">
+      <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
+      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+        Loading portal module...
+      </p>
+    </div>
+  </div>
+);
 
 const MandatoryPasswordSetupModal: React.FC = () => {
   const {
@@ -165,27 +210,29 @@ const MainApp: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1">
-        {verifiedRole === 'student' ? (
-          <StudentPortalLayout />
-        ) : verifiedRole === 'teacher' ? (
-          <TeacherPortalLayout />
-        ) : verifiedRole === 'parent' ? (
-          <ParentPortalLayout />
-        ) : verifiedRole === 'admin' ? (
-          <AdminPortalLayout />
-        ) : (
-          /* Public Website Pages */
-          <>
-            {currentView === 'home' && <HomePage />}
-            {currentView === 'about' && <AboutPage />}
-            {currentView === 'admissions' && <AdmissionsPage />}
-            {currentView === 'news' && <NewsEventsPage />}
-            {currentView === 'gallery' && <GalleryPage />}
-            {currentView === 'contact' && <ContactPage />}
-            {currentView === 'apply' && <OnlineApplicationPage />}
-            {currentView === 'employment' && <EmploymentPage />}
-          </>
-        )}
+        <Suspense fallback={<PortalViewFallback />}>
+          {verifiedRole === 'student' ? (
+            <StudentPortalLayout />
+          ) : verifiedRole === 'teacher' ? (
+            <TeacherPortalLayout />
+          ) : verifiedRole === 'parent' ? (
+            <ParentPortalLayout />
+          ) : verifiedRole === 'admin' ? (
+            <AdminPortalLayout />
+          ) : (
+            /* Public Website Pages */
+            <>
+              {currentView === 'home' && <HomePage />}
+              {currentView === 'about' && <AboutPage />}
+              {currentView === 'admissions' && <AdmissionsPage />}
+              {currentView === 'news' && <NewsEventsPage />}
+              {currentView === 'gallery' && <GalleryPage />}
+              {currentView === 'contact' && <ContactPage />}
+              {currentView === 'apply' && <OnlineApplicationPage />}
+              {currentView === 'employment' && <EmploymentPage />}
+            </>
+          )}
+        </Suspense>
       </main>
 
       {/* Footer (shown on public view) */}
@@ -193,6 +240,9 @@ const MainApp: React.FC = () => {
 
       {/* Floating WhatsApp Action Button for Public Site */}
       {verifiedRole === 'public' && <WhatsAppButton />}
+
+      {/* CBT-Safe PWA Update & Connectivity Bar */}
+      <PWAConnectivityAndUpdateBar />
 
       <MandatoryPasswordSetupModal />
     </div>

@@ -91,6 +91,8 @@ export const AboutPage: React.FC = () => {
               src={systemSettings.aboutPrincipalAvatar || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=300"}
               alt="Principal"
               referrerPolicy="no-referrer"
+              loading="lazy"
+              decoding="async"
               className="w-28 h-28 rounded-full object-cover mx-auto border-2 border-amber-400"
             />
             <div>
@@ -104,6 +106,8 @@ export const AboutPage: React.FC = () => {
             <img
               src="https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=300"
               alt="Vice Principal Academic"
+              loading="lazy"
+              decoding="async"
               className="w-28 h-28 rounded-full object-cover mx-auto border-2 border-amber-400"
             />
             <div>
@@ -117,6 +121,8 @@ export const AboutPage: React.FC = () => {
             <img
               src="https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?auto=format&fit=crop&q=80&w=300"
               alt="Vice Principal Administration"
+              loading="lazy"
+              decoding="async"
               className="w-28 h-28 rounded-full object-cover mx-auto border-2 border-amber-400"
             />
             <div>

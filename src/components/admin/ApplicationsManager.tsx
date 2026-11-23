@@ -18,7 +18,8 @@ export const ApplicationsManager: React.FC = () => {
 
       {/* Applications Table */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xl">
-        <table className="w-full text-left border-collapse text-xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs min-w-[780px]">
           <thead>
             <tr className="bg-slate-900 text-white font-semibold">
               <th className="p-3">Ref ID</th>
@@ -73,7 +74,8 @@ export const ApplicationsManager: React.FC = () => {
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
     </div>
