@@ -15,6 +15,8 @@ import { MathText } from '../common/MathText';
 import { QuestionRichContent } from '../common/QuestionRichContent';
 import { hasDiagramTokens } from '../../lib/diagramFormatting';
 import { formatFriendlyNetworkError } from '../../lib/pwaProtection';
+import { SESSION_TIMEOUT_CONFIG } from '../../config/sessionConfig';
+import { clearCBTExamHeartbeat, publishCBTExamHeartbeat } from '../../lib/sessionActivity';
 import {
   Clock,
   AlertTriangle,
@@ -97,6 +99,9 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
     createMonotonicCountdownAnchor(initialRemaining)
   );
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(initialRemaining);
+  const [examExpiresAtMs, setExamExpiresAtMs] = useState<number>(
+    () => Date.now() + initialRemaining * 1000
+  );
 
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -173,6 +178,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
           : 0;
       countdownAnchorRef.current = createMonotonicCountdownAnchor(nextRemaining);
       setTimeLeftSeconds(nextRemaining);
+      setExamExpiresAtMs(Date.now() + nextRemaining * 1000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (isTerminalCBTSessionError(msg)) {
@@ -286,6 +292,41 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
     return () => clearInterval(timer);
   }, [isExamCompleted]);
 
+  // Verified CBT session heartbeat for cross-tab session-inactivity exemption
+  useEffect(() => {
+    if (isExamCompleted || timeLeftSeconds <= 0) {
+      clearCBTExamHeartbeat(student.id);
+      return;
+    }
+
+    const emitHeartbeat = () => {
+      const remainingSec = computeRemainingSecondsMonotonic(countdownAnchorRef.current);
+      if (remainingSec <= 0 || isExamCompletedRef.current) {
+        clearCBTExamHeartbeat(student.id);
+        return;
+      }
+      const nowMs = Date.now();
+      publishCBTExamHeartbeat({
+        examId: exam.id,
+        sessionId: session.sessionId,
+        studentId: student.id,
+        updatedAtMs: nowMs,
+        expiresAtMs: nowMs + remainingSec * 1000,
+      });
+    };
+
+    emitHeartbeat();
+    const heartbeatTimer = window.setInterval(
+      emitHeartbeat,
+      SESSION_TIMEOUT_CONFIG.CBT_HEARTBEAT_INTERVAL_MS
+    );
+
+    return () => {
+      window.clearInterval(heartbeatTimer);
+      clearCBTExamHeartbeat(student.id);
+    };
+  }, [isExamCompleted, timeLeftSeconds <= 0, exam.id, session.sessionId, student.id]);
+
   const handleCompleteExam = useCallback(
     async (isAutoSubmit = false) => {
       if (isExamCompletedRef.current || isSubmittingRef.current) return;
@@ -316,6 +357,7 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
         }
         setIsExamCompleted(true);
         draftSaverRef.current?.dispose();
+        clearCBTExamHeartbeat(student.id);
         try {
           localStorage.removeItem(draftStorageKey);
           sessionStorage.removeItem(`cbt_active_exam_${student.id}`);
@@ -395,7 +437,8 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
 
   return (
     <div
-      data-cbt-exam-active={!isExamCompleted ? 'true' : 'false'}
+      data-cbt-exam-active={!isExamCompleted && timeLeftSeconds > 0 ? 'true' : 'false'}
+      data-cbt-expires-at={!isExamCompleted && timeLeftSeconds > 0 ? String(examExpiresAtMs) : ''}
       className="bg-slate-950 text-white min-h-screen p-3 sm:p-8 space-y-5 sm:space-y-6"
     >
       {/* Top Examination Control Bar */}

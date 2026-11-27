@@ -4,6 +4,7 @@ import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
 import { WhatsAppButton } from './components/common/WhatsAppButton';
 import { PWAConnectivityAndUpdateBar } from './components/common/PWAConnectivityAndUpdateBar';
+import { SessionTimeoutProvider } from './components/common/SessionTimeoutProvider';
 import { CheckCircle2, AlertCircle, ShieldAlert, LogOut } from 'lucide-react';
 import { isPasswordValidationFailure, validatePortalPassword } from './lib/accountProvisioning';
 
@@ -252,7 +253,9 @@ const MainApp: React.FC = () => {
 export default function App() {
   return (
     <SchoolProvider>
-      <MainApp />
+      <SessionTimeoutProvider>
+        <MainApp />
+      </SessionTimeoutProvider>
     </SchoolProvider>
   );
 }

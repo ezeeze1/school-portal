@@ -3,6 +3,7 @@ import { useSchool } from '../../context/SchoolContext';
 import { UserRole } from '../../types';
 import { isSupabaseConfigured } from '../../lib/supabase';
 import { normalizeAdmissionNumber } from '../../lib/admissionNumber';
+import { useSessionTimeout } from '../common/SessionTimeoutProvider';
 import {
   X,
   ArrowRight,
@@ -28,6 +29,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   defaultRole = 'student',
 }) => {
   const { signInWithPassword, signInStudentWithAdmissionNo } = useSchool();
+  const { sessionExpiredNotice, clearSessionExpiredNotice } = useSessionTimeout();
   const [selectedRole, setSelectedRole] = useState<UserRole>(defaultRole);
   const [admissionNo, setAdmissionNo] = useState('');
   const [email, setEmail] = useState('');
@@ -85,6 +87,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         const result = await signInStudentWithAdmissionNo(cleanAdmissionNo, password);
         if (result.ok) {
           setPassword('');
+          clearSessionExpiredNotice();
           onClose();
         } else {
           setErrorMsg(result.error || 'Invalid admission number or password.');
@@ -108,6 +111,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       const result = await signInWithPassword(cleanEmail, password);
       if (result.ok) {
         setPassword('');
+        clearSessionExpiredNotice();
         onClose();
       } else {
         setErrorMsg(result.error || 'Invalid email or password.');
@@ -149,6 +153,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
         {/* Body */}
         <div className="p-6 space-y-5">
+          {sessionExpiredNotice && (
+            <div
+              role="status"
+              className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200 font-semibold leading-relaxed"
+            >
+              <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <span>{sessionExpiredNotice}</span>
+            </div>
+          )}
+
           {!isSupabaseConfigured && (
             <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300 font-semibold">
               <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />

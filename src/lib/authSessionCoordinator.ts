@@ -2,6 +2,7 @@ import type { AuthChangeEvent } from '@supabase/supabase-js';
 import type { User, UserProfile, UserRole } from '../types';
 import type { SupabasePortalSnapshot } from '../services/supabaseSchoolService';
 import { isInternalStudentAuthEmail } from './accountProvisioning';
+import { purgeSupabaseAuthTokensOnFailure } from './sessionActivity';
 
 export type AuthenticatedPortalRole = Exclude<UserRole, 'public'>;
 
@@ -28,7 +29,9 @@ export interface AuthClientLike {
     data: { user: AuthUserLike | null; session: AuthSessionLike | null };
     error: { message: string } | null;
   }>;
-  signOut(): Promise<{ error?: { message: string } | null } | void>;
+  signOut(options?: {
+    scope?: 'global' | 'local' | 'others';
+  }): Promise<{ error?: { message: string } | null } | void>;
   onAuthStateChange(
     callback: (event: AuthChangeEvent, session: AuthSessionLike | null) => void
   ): {
@@ -300,12 +303,52 @@ export class AuthSessionCoordinator {
     this.pendingTimers.add(timerId);
   }
 
-  private async safeSignOutInternal(): Promise<void> {
+  private async safeSignOutInternal(localOnly = false): Promise<void> {
     this.internalSignOutInFlight = true;
     try {
-      await this.auth.signOut();
+      if (localOnly) {
+        try {
+          await this.auth.signOut({ scope: 'local' });
+        } catch {
+          purgeSupabaseAuthTokensOnFailure();
+        }
+        return;
+      }
+
+      const SIGN_OUT_TIMEOUT_MS = 5000;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const result = await Promise.race([
+          this.auth.signOut(),
+          new Promise<{ error: { message: string } }>((resolve) => {
+            timeoutId = setTimeout(
+              () => resolve({ error: { message: 'Sign-out request timed out.' } }),
+              SIGN_OUT_TIMEOUT_MS
+            );
+          }),
+        ]);
+        if (result && 'error' in result && result.error) {
+          console.warn('[Auth] Remote sign-out returned error, clearing local session:', result.error);
+          try {
+            await this.auth.signOut({ scope: 'local' });
+          } catch {
+            // Fall through to token purge
+          }
+          purgeSupabaseAuthTokensOnFailure();
+        }
+      } finally {
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+      }
     } catch (err) {
-      console.warn('[Auth] Sign-out error:', err);
+      console.warn('[Auth] Sign-out error, clearing local auth session:', err);
+      try {
+        await this.auth.signOut({ scope: 'local' });
+      } catch {
+        // Ignore fallback error
+      }
+      purgeSupabaseAuthTokensOnFailure();
     } finally {
       this.internalSignOutInFlight = false;
     }
@@ -961,19 +1004,26 @@ export class AuthSessionCoordinator {
   }
 
   /**
-   * Signs out of Supabase Auth, invalidates any in-flight hydration, clears all
-   * private portal state, and reloads the public website snapshot.
+   * Locks protected portal state immediately, signs out of Supabase Auth (with
+   * fail-closed local token cleanup if offline/network fails), invalidates any
+   * in-flight hydration, and reloads the public website snapshot.
    */
-  async logout(): Promise<void> {
+  async logout(options?: { localOnly?: boolean }): Promise<void> {
     this.sessionGeneration += 1;
     this.inFlightHydration = null;
     this.activeAuthUserId = null;
     this.activeRole = 'public';
     this.clearPendingTimers();
 
-    await this.safeSignOutInternal();
-
+    // Lock protected dashboards immediately before awaiting remote network sign-out
     this.callbacks.resetToPublic({ navigateHome: true });
-    await this.callbacks.applyPublicSnapshot();
+
+    await this.safeSignOutInternal(Boolean(options?.localOnly));
+
+    try {
+      await this.callbacks.applyPublicSnapshot();
+    } catch (err) {
+      console.warn('[Auth] Unable to refresh public snapshot after logout:', err);
+    }
   }
 }

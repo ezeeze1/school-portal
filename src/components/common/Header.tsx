@@ -25,13 +25,30 @@ import {
 } from 'lucide-react';
 import { LoginModal } from '../auth/LoginModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { useSessionTimeout } from './SessionTimeoutProvider';
 
 export const Header: React.FC = () => {
   const { currentUser, activeRole, authLoading, logout, currentView, setCurrentView, systemSettings } = useSchool();
+  const {
+    sessionExpiredNotice,
+    shouldOpenLoginModal,
+    consumeLoginModalTrigger,
+    clearSessionExpiredNotice,
+    notifyUserNavigationActivity,
+  } = useSessionTimeout();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [loginModalDefaultRole, setLoginModalDefaultRole] = useState<UserRole>('student');
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+
+  React.useEffect(() => {
+    if (shouldOpenLoginModal && !currentUser) {
+      setIsLoginModalOpen(true);
+      setIsMobileMenuOpen(false);
+      setIsUserMenuOpen(false);
+      consumeLoginModalTrigger();
+    }
+  }, [shouldOpenLoginModal, currentUser, consumeLoginModalTrigger]);
 
   const navItems = [
     { id: 'home', label: 'Home' },
@@ -44,6 +61,7 @@ export const Header: React.FC = () => {
   ];
 
   const handleNavClick = (viewId: string) => {
+    notifyUserNavigationActivity();
     setCurrentView(viewId);
     setIsMobileMenuOpen(false);
   };
@@ -189,7 +207,8 @@ export const Header: React.FC = () => {
                   <div className="border-t border-slate-100 dark:border-slate-800 mt-2 pt-1">
                     <button
                       onClick={() => {
-                        logout();
+                        clearSessionExpiredNotice();
+                        void logout({ reason: 'manual' });
                         setIsUserMenuOpen(false);
                       }}
                       className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 flex items-center gap-2"
@@ -260,6 +279,35 @@ export const Header: React.FC = () => {
                 {authLoading ? 'Loading Session...' : 'Portal Login'}
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Inactivity Auto-Logout Notice Banner (visible on public view until dismissed or signed back in) */}
+      {!currentUser && sessionExpiredNotice && (
+        <div
+          role="alert"
+          className="bg-amber-50 dark:bg-amber-950/50 border-t border-b border-amber-200 dark:border-amber-800 px-4 sm:px-8 py-2.5"
+        >
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200">
+            <p className="font-semibold leading-relaxed">{sessionExpiredNotice}</p>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => openLoginForRole('student')}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold whitespace-nowrap"
+              >
+                Log In Again
+              </button>
+              <button
+                type="button"
+                onClick={clearSessionExpiredNotice}
+                aria-label="Dismiss session timeout notice"
+                className="p-1.5 rounded-lg text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       )}

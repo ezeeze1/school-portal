@@ -90,6 +90,7 @@ import {
   resolveMatchingTeacher,
   validateAcademicEntityReferences,
 } from '../lib/academicSelection';
+import { clearScopedSessionSyncStorage } from '../lib/sessionActivity';
 
 interface SchoolContextType {
   // Auth & Session State
@@ -111,7 +112,7 @@ interface SchoolContextType {
     password?: string;
     username?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
-  logout: () => Promise<void>;
+  logout: (options?: { reason?: 'inactivity' | 'manual'; localOnly?: boolean }) => Promise<void>;
 
   // Admin Account Provisioning & Authoritative Status
   accountStatuses: Record<string, AccountStatusSummary>;
@@ -524,6 +525,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const resetToPublic = useCallback(
     (options?: { navigateHome?: boolean }) => {
       clearPrivateCollections();
+      clearScopedSessionSyncStorage();
       try {
         for (let i = sessionStorage.length - 1; i >= 0; i--) {
           const key = sessionStorage.key(i);
@@ -1000,10 +1002,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return { ok: true };
   };
 
-  const logout = async () => {
+  const logout = async (options?: { reason?: 'inactivity' | 'manual'; localOnly?: boolean }) => {
     const coordinator = getAuthCoordinator();
     if (coordinator) {
-      await coordinator.logout();
+      await coordinator.logout({ localOnly: options?.localOnly });
       return;
     }
     resetToPublic({ navigateHome: true });
