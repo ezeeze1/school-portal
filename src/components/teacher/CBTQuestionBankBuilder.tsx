@@ -24,8 +24,20 @@ import {
   parseCsvLine,
   stripMathForSpellCheck,
 } from '../../lib/mathFormatting';
+import {
+  attachDiagramToText,
+  hasDiagramTokens,
+  removeDiagramTokenFromText,
+  replaceDiagramTokenInText,
+  stripDiagramsForSpellCheck,
+} from '../../lib/diagramFormatting';
 import { MathText } from '../common/MathText';
+import { QuestionRichContent } from '../common/QuestionRichContent';
 import { MathSymbolToolbar, QuestionMathPreview } from './MathSymbolToolbar';
+import type {
+  DiagramModalSavePayload,
+  DiagramTargetField,
+} from './DiagramAndGraphBuilderModal';
 import {
   Plus,
   Trash2,
@@ -44,7 +56,19 @@ import {
   Lock,
   Shuffle,
   ArrowUpDown,
+  Shapes,
+  LineChart,
 } from 'lucide-react';
+
+const DiagramAndGraphBuilderModal = React.lazy(
+  () => import('./DiagramAndGraphBuilderModal')
+);
+const QuestionDiagramPreviewCard = React.lazy(
+  () =>
+    import('./QuestionDiagramPreviewCard').then((m) => ({
+      default: m.QuestionDiagramPreviewCard,
+    }))
+);
 
 // Interactive Spell Checker dictionary for CBT Questions
 const COMMON_DICTIONARY = [
@@ -83,8 +107,8 @@ const CBTQuestionSpellingHelper: React.FC<SpellingHelperProps> = ({ text, onCorr
 
   if (!text) return null;
 
-  // Strip LaTeX/math notation before checking English spelling, then split into words
-  const words = stripMathForSpellCheck(text)
+  // Strip diagram tokens & LaTeX/math notation before checking English spelling, then split into words
+  const words = stripMathForSpellCheck(stripDiagramsForSpellCheck(text))
     .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"]/g, " ")
     .split(/\s+/)
     .map(w => w.trim())
@@ -310,6 +334,12 @@ export const CBTQuestionBankBuilder: React.FC = () => {
     label: string;
     el: HTMLInputElement | HTMLTextAreaElement | null;
   } | null>(null);
+  const [diagramModalState, setDiagramModalState] = useState<{
+    idx: number;
+    initialMode: 'geometry' | 'graph';
+    initialTargetField: DiagramTargetField;
+    editingToken?: string | null;
+  } | null>(null);
 
   const handleEditExam = (exam: CBTExam) => {
     setSaveError(null);
@@ -383,6 +413,73 @@ export const CBTQuestionBankBuilder: React.FC = () => {
 
   const handleDeleteQuestion = (idx: number) => {
     setQuestions((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSaveQuestionDiagram = (payload: DiagramModalSavePayload) => {
+    if (!diagramModalState) return;
+    const { idx } = diagramModalState;
+    const targetQ = questions[idx];
+    if (!targetQ) {
+      setDiagramModalState(null);
+      return;
+    }
+
+    const applyToken = (currentVal: string, cursor?: number | null) =>
+      payload.replacingToken
+        ? replaceDiagramTokenInText(currentVal, payload.replacingToken, payload.token)
+        : attachDiagramToText(currentVal, payload.token, payload.placement, cursor);
+
+    if (payload.targetField === 'question') {
+      const cursor =
+        focusedMathTarget?.idx === idx && focusedMathTarget.field === 'question'
+          ? focusedMathTarget.el?.selectionStart
+          : null;
+      handleUpdateQuestion(idx, { question: applyToken(targetQ.question, cursor) });
+    } else if (
+      payload.targetField === 'A' ||
+      payload.targetField === 'B' ||
+      payload.targetField === 'C' ||
+      payload.targetField === 'D'
+    ) {
+      const optKey = payload.targetField;
+      const cursor =
+        focusedMathTarget?.idx === idx && focusedMathTarget.field === optKey
+          ? focusedMathTarget.el?.selectionStart
+          : null;
+      handleUpdateQuestion(idx, {
+        options: {
+          ...targetQ.options,
+          [optKey]: applyToken(targetQ.options[optKey], cursor),
+        },
+      });
+    }
+
+    setPreviewQuestionIds((prev) => ({
+      ...prev,
+      [targetQ.id || `q-${idx}`]: true,
+    }));
+    setDiagramModalState(null);
+  };
+
+  const handleRemoveQuestionDiagram = (
+    idx: number,
+    field: DiagramTargetField,
+    token: string
+  ) => {
+    const targetQ = questions[idx];
+    if (!targetQ) return;
+    if (field === 'question') {
+      handleUpdateQuestion(idx, {
+        question: removeDiagramTokenFromText(targetQ.question, token),
+      });
+    } else if (field === 'A' || field === 'B' || field === 'C' || field === 'D') {
+      handleUpdateQuestion(idx, {
+        options: {
+          ...targetQ.options,
+          [field]: removeDiagramTokenFromText(targetQ.options[field], token),
+        },
+      });
+    }
   };
 
   // CSV Import Parser: quote-aware so commas inside math/coordinates stay intact
@@ -1066,14 +1163,52 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                     </div>
                   </div>
 
-                  <MathSymbolToolbar
-                    activeFieldLabel={activeLabelForRow}
-                    onInsertSnippet={handleInsertForQuestion}
-                    showPreview={isPreviewOpen}
-                    onTogglePreview={() =>
-                      setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
-                    }
-                  />
+                  <div className="space-y-2">
+                    <MathSymbolToolbar
+                      activeFieldLabel={activeLabelForRow}
+                      onInsertSnippet={handleInsertForQuestion}
+                      showPreview={isPreviewOpen}
+                      onTogglePreview={() =>
+                        setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
+                      }
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDiagramModalState({
+                            idx,
+                            initialMode: 'geometry',
+                            initialTargetField:
+                              focusedMathTarget?.idx === idx
+                                ? focusedMathTarget.field
+                                : 'question',
+                            editingToken: null,
+                          })
+                        }
+                        className="px-3 py-2 rounded-xl bg-slate-900 dark:bg-amber-500 hover:opacity-90 text-white dark:text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-sm whitespace-nowrap"
+                      >
+                        <Shapes className="w-3.5 h-3.5" /> Insert Diagram
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDiagramModalState({
+                            idx,
+                            initialMode: 'graph',
+                            initialTargetField:
+                              focusedMathTarget?.idx === idx
+                                ? focusedMathTarget.field
+                                : 'question',
+                            editingToken: null,
+                          })
+                        }
+                        className="px-3 py-2 rounded-xl bg-white dark:bg-slate-900 hover:border-amber-500 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 font-bold text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
+                      >
+                        <LineChart className="w-3.5 h-3.5 text-amber-500" /> Insert Graph / Chart
+                      </button>
+                    </div>
+                  </div>
 
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
@@ -1096,6 +1231,25 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                       placeholder="Enter examination question (supports Unicode & LaTeX)..."
                       spellCheck={true}
                     />
+                    {hasDiagramTokens(q.question) && (
+                      <div className="mt-2 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <QuestionRichContent
+                          text={q.question}
+                          interactiveZoom
+                          onEditDiagramToken={(token, spec) =>
+                            setDiagramModalState({
+                              idx,
+                              initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                              initialTargetField: 'question',
+                              editingToken: token,
+                            })
+                          }
+                          onRemoveDiagramToken={(token) =>
+                            handleRemoveQuestionDiagram(idx, 'question', token)
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <CBTQuestionSpellingHelper
@@ -1164,12 +1318,60 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                             className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-xs"
                             spellCheck={true}
                           />
+                          {hasDiagramTokens(q.options[opt]) && (
+                            <div className="pt-1">
+                              <QuestionRichContent
+                                text={q.options[opt]}
+                                compact
+                                interactiveZoom
+                                onEditDiagramToken={(token, spec) =>
+                                  setDiagramModalState({
+                                    idx,
+                                    initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                                    initialTargetField: opt,
+                                    editingToken: token,
+                                  })
+                                }
+                                onRemoveDiagramToken={(token) =>
+                                  handleRemoveQuestionDiagram(idx, opt, token)
+                                }
+                              />
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
 
-                  {isPreviewOpen && <QuestionMathPreview question={q} />}
+                  {isPreviewOpen && (
+                    hasDiagramTokens(q.question) ||
+                    (['A', 'B', 'C', 'D'] as const).some((o) => hasDiagramTokens(q.options[o])) ? (
+                      <React.Suspense
+                        fallback={
+                          <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs text-slate-500">
+                            Loading diagram preview...
+                          </div>
+                        }
+                      >
+                        <QuestionDiagramPreviewCard
+                          question={q}
+                          onEditDiagramToken={(field, token, spec) =>
+                            setDiagramModalState({
+                              idx,
+                              initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                              initialTargetField: field,
+                              editingToken: token,
+                            })
+                          }
+                          onRemoveDiagramToken={(field, token) =>
+                            handleRemoveQuestionDiagram(idx, field, token)
+                          }
+                        />
+                      </React.Suspense>
+                    ) : (
+                      <QuestionMathPreview question={q} />
+                    )
+                  )}
 
                   <div className="flex flex-wrap gap-4 items-center pt-2">
                     {isLegacyKey && (
@@ -1309,7 +1511,12 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                     className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2 text-xs"
                   >
                     <p className="font-bold text-slate-900 dark:text-white">
-                      Q{pIdx + 1}. <MathText text={pq.question} />
+                      Q{pIdx + 1}.{' '}
+                      {hasDiagramTokens(pq.question) ? (
+                        <QuestionRichContent text={pq.question} interactiveZoom />
+                      ) : (
+                        <MathText text={pq.question} />
+                      )}
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px]">
                       {(['A', 'B', 'C', 'D'] as const).map((opt) => (
@@ -1321,7 +1528,12 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
                           }`}
                         >
-                          <strong>{opt}.</strong> <MathText text={pq.options[opt]} />
+                          <strong>{opt}.</strong>{' '}
+                          {hasDiagramTokens(pq.options[opt]) ? (
+                            <QuestionRichContent text={pq.options[opt]} compact interactiveZoom />
+                          ) : (
+                            <MathText text={pq.options[opt]} />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1677,7 +1889,12 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                   >
                     <div className="flex justify-between items-start gap-2">
                       <p className="font-bold text-slate-200 min-w-0 flex-1">
-                        Q{idx + 1}. <MathText text={q.question} />
+                        Q{idx + 1}.{' '}
+                        {hasDiagramTokens(q.question) ? (
+                          <QuestionRichContent text={q.question} interactiveZoom />
+                        ) : (
+                          <MathText text={q.question} />
+                        )}
                       </p>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold flex-shrink-0 ${
@@ -1709,7 +1926,12 @@ export const CBTQuestionBankBuilder: React.FC = () => {
                             className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] min-w-0 ${optionBg}`}
                           >
                             <span className="min-w-0 flex-1">
-                              <strong>{optKey}.</strong> <MathText text={optionText} />
+                              <strong>{optKey}.</strong>{' '}
+                              {hasDiagramTokens(optionText) ? (
+                                <QuestionRichContent text={optionText} compact interactiveZoom />
+                              ) : (
+                                <MathText text={optionText} />
+                              )}
                             </span>
                             {isStudentChoice && (
                               <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-900 text-white flex-shrink-0">
@@ -1770,6 +1992,30 @@ export const CBTQuestionBankBuilder: React.FC = () => {
         message={`Are you sure you want to permanently delete ${selectedExamIds.length} selected CBT exam paper(s) along with all corresponding student attempts?`}
         itemName={`${selectedExamIds.length} CBT Examination(s)`}
       />
+
+      {/* Lazy-Loaded Geometry, Diagram & Graph Builder Modal */}
+      {diagramModalState && questions[diagramModalState.idx] && (
+        <React.Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-slate-950/75 flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl px-6 py-4 text-xs font-bold text-slate-700 dark:text-slate-200 shadow-xl">
+                Loading Geometry, Diagram &amp; Graph Builder...
+              </div>
+            </div>
+          }
+        >
+          <DiagramAndGraphBuilderModal
+            isOpen={true}
+            initialMode={diagramModalState.initialMode}
+            question={questions[diagramModalState.idx]}
+            questionNumber={diagramModalState.idx + 1}
+            initialTargetField={diagramModalState.initialTargetField}
+            editingToken={diagramModalState.editingToken}
+            onClose={() => setDiagramModalState(null)}
+            onSaveDiagram={handleSaveQuestionDiagram}
+          />
+        </React.Suspense>
+      )}
     </div>
   );
 };

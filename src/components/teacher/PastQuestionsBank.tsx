@@ -16,8 +16,19 @@ import {
 } from '../../lib/academicSelection';
 import { computeSafeExamEndDate } from '../../lib/cbtReliability';
 import { insertSnippetAtCursor } from '../../lib/mathFormatting';
+import {
+  attachDiagramToText,
+  hasDiagramTokens,
+  removeDiagramTokenFromText,
+  replaceDiagramTokenInText,
+} from '../../lib/diagramFormatting';
 import { MathText } from '../common/MathText';
+import { QuestionRichContent } from '../common/QuestionRichContent';
 import { MathSymbolToolbar, QuestionMathPreview } from './MathSymbolToolbar';
+import type {
+  DiagramModalSavePayload,
+  DiagramTargetField,
+} from './DiagramAndGraphBuilderModal';
 import {
   BookOpen,
   Search,
@@ -39,7 +50,19 @@ import {
   ArrowRight,
   Shuffle,
   ArrowUpDown,
+  Shapes,
+  LineChart,
 } from 'lucide-react';
+
+const DiagramAndGraphBuilderModal = React.lazy(
+  () => import('./DiagramAndGraphBuilderModal')
+);
+const QuestionDiagramPreviewCard = React.lazy(
+  () =>
+    import('./QuestionDiagramPreviewCard').then((m) => ({
+      default: m.QuestionDiagramPreviewCard,
+    }))
+);
 
 export const PastQuestionsBank: React.FC = () => {
   const { cbtExams, classes, subjects, teachers, currentUser, createCBTExam, updateCBTExam, deleteCBTExam, academicSessions } = useSchool();
@@ -79,6 +102,12 @@ export const PastQuestionsBank: React.FC = () => {
     field: 'question' | 'A' | 'B' | 'C' | 'D' | 'explanation';
     label: string;
     el: HTMLInputElement | HTMLTextAreaElement | null;
+  } | null>(null);
+  const [diagramModalState, setDiagramModalState] = useState<{
+    idx: number;
+    initialMode: 'geometry' | 'graph';
+    initialTargetField: DiagramTargetField;
+    editingToken?: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -177,6 +206,80 @@ export const PastQuestionsBank: React.FC = () => {
 
   const handleRemoveQuestionRow = (idx: number) => {
     setFormQuestions((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSavePastPaperDiagram = (payload: DiagramModalSavePayload) => {
+    if (!diagramModalState) return;
+    const { idx } = diagramModalState;
+    const targetQ = formQuestions[idx];
+    if (!targetQ) {
+      setDiagramModalState(null);
+      return;
+    }
+
+    const applyToken = (currentVal: string, cursor?: number | null) =>
+      payload.replacingToken
+        ? replaceDiagramTokenInText(currentVal, payload.replacingToken, payload.token)
+        : attachDiagramToText(currentVal, payload.token, payload.placement, cursor);
+
+    if (payload.targetField === 'question') {
+      const cursor =
+        focusedMathTarget?.idx === idx && focusedMathTarget.field === 'question'
+          ? focusedMathTarget.el?.selectionStart
+          : null;
+      handleUpdateQuestionRow(idx, { question: applyToken(targetQ.question, cursor) });
+    } else if (payload.targetField === 'explanation') {
+      const cursor =
+        focusedMathTarget?.idx === idx && focusedMathTarget.field === 'explanation'
+          ? focusedMathTarget.el?.selectionStart
+          : null;
+      handleUpdateQuestionRow(idx, {
+        explanation: applyToken(targetQ.explanation || '', cursor),
+      });
+    } else {
+      const optKey = payload.targetField;
+      const cursor =
+        focusedMathTarget?.idx === idx && focusedMathTarget.field === optKey
+          ? focusedMathTarget.el?.selectionStart
+          : null;
+      handleUpdateQuestionRow(idx, {
+        options: {
+          ...targetQ.options,
+          [optKey]: applyToken(targetQ.options[optKey], cursor),
+        },
+      });
+    }
+
+    setPreviewQuestionIds((prev) => ({
+      ...prev,
+      [targetQ.id || `row-${idx}`]: true,
+    }));
+    setDiagramModalState(null);
+  };
+
+  const handleRemovePastPaperDiagram = (
+    idx: number,
+    field: DiagramTargetField,
+    token: string
+  ) => {
+    const targetQ = formQuestions[idx];
+    if (!targetQ) return;
+    if (field === 'question') {
+      handleUpdateQuestionRow(idx, {
+        question: removeDiagramTokenFromText(targetQ.question, token),
+      });
+    } else if (field === 'explanation') {
+      handleUpdateQuestionRow(idx, {
+        explanation: removeDiagramTokenFromText(targetQ.explanation || '', token),
+      });
+    } else {
+      handleUpdateQuestionRow(idx, {
+        options: {
+          ...targetQ.options,
+          [field]: removeDiagramTokenFromText(targetQ.options[field], token),
+        },
+      });
+    }
   };
 
   const handleSavePastPaper = async (e: React.FormEvent) => {
@@ -660,7 +763,12 @@ export const PastQuestionsBank: React.FC = () => {
                 <div key={q.id || idx} className="p-5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
                   <div className="flex justify-between items-start gap-2">
                     <p className="font-bold text-slate-900 dark:text-white text-sm min-w-0 flex-1">
-                      Question #{idx + 1}. <MathText text={q.question} />
+                      Question #{idx + 1}.{' '}
+                      {hasDiagramTokens(q.question) ? (
+                        <QuestionRichContent text={q.question} interactiveZoom />
+                      ) : (
+                        <MathText text={q.question} />
+                      )}
                     </p>
                     <span className="font-bold text-amber-500 bg-amber-100 dark:bg-amber-950/80 px-2 py-0.5 rounded text-[10px] flex-shrink-0">
                       {q.marks || 1} Mark
@@ -680,7 +788,12 @@ export const PastQuestionsBank: React.FC = () => {
                           }`}
                         >
                           <span className="min-w-0 flex-1">
-                            <strong>{optKey}.</strong> <MathText text={q.options[optKey]} />
+                            <strong>{optKey}.</strong>{' '}
+                            {hasDiagramTokens(q.options[optKey]) ? (
+                              <QuestionRichContent text={q.options[optKey]} compact interactiveZoom />
+                            ) : (
+                              <MathText text={q.options[optKey]} />
+                            )}
                           </span>
                           {isCorrect && (
                             <span className="text-[10px] font-bold uppercase bg-emerald-600 text-white px-2 py-0.5 rounded flex-shrink-0">
@@ -694,7 +807,12 @@ export const PastQuestionsBank: React.FC = () => {
 
                   {q.explanation && (
                     <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-800 dark:text-amber-300">
-                      <strong>Solution / Explanation:</strong> <MathText text={q.explanation} />
+                      <strong>Solution / Explanation:</strong>{' '}
+                      {hasDiagramTokens(q.explanation) ? (
+                        <QuestionRichContent text={q.explanation} compact interactiveZoom />
+                      ) : (
+                        <MathText text={q.explanation} />
+                      )}
                     </div>
                   )}
                 </div>
@@ -774,14 +892,47 @@ export const PastQuestionsBank: React.FC = () => {
             <div className="space-y-6 text-xs text-slate-900">
               {printingExam.questions.map((q, idx) => (
                 <div key={q.id || idx} className="space-y-2">
-                  <p className="font-bold text-sm">
-                    {idx + 1}. <MathText text={q.question} />
-                  </p>
+                  <div className="font-bold text-sm">
+                    {idx + 1}.{' '}
+                    {hasDiagramTokens(q.question) ? (
+                      <QuestionRichContent text={q.question} interactiveZoom={false} />
+                    ) : (
+                      <MathText text={q.question} />
+                    )}
+                  </div>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-1 pl-4 font-medium">
-                    <span>(A) <MathText text={q.options.A} /></span>
-                    <span>(B) <MathText text={q.options.B} /></span>
-                    <span>(C) <MathText text={q.options.C} /></span>
-                    <span>(D) <MathText text={q.options.D} /></span>
+                    <span>
+                      (A){' '}
+                      {hasDiagramTokens(q.options.A) ? (
+                        <QuestionRichContent text={q.options.A} compact interactiveZoom={false} />
+                      ) : (
+                        <MathText text={q.options.A} />
+                      )}
+                    </span>
+                    <span>
+                      (B){' '}
+                      {hasDiagramTokens(q.options.B) ? (
+                        <QuestionRichContent text={q.options.B} compact interactiveZoom={false} />
+                      ) : (
+                        <MathText text={q.options.B} />
+                      )}
+                    </span>
+                    <span>
+                      (C){' '}
+                      {hasDiagramTokens(q.options.C) ? (
+                        <QuestionRichContent text={q.options.C} compact interactiveZoom={false} />
+                      ) : (
+                        <MathText text={q.options.C} />
+                      )}
+                    </span>
+                    <span>
+                      (D){' '}
+                      {hasDiagramTokens(q.options.D) ? (
+                        <QuestionRichContent text={q.options.D} compact interactiveZoom={false} />
+                      ) : (
+                        <MathText text={q.options.D} />
+                      )}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -1043,14 +1194,52 @@ export const PastQuestionsBank: React.FC = () => {
                       </div>
                     </div>
 
-                    <MathSymbolToolbar
-                      activeFieldLabel={activeLabelForRow}
-                      onInsertSnippet={handleInsertForRow}
-                      showPreview={isPreviewOpen}
-                      onTogglePreview={() =>
-                        setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
-                      }
-                    />
+                    <div className="space-y-2">
+                      <MathSymbolToolbar
+                        activeFieldLabel={activeLabelForRow}
+                        onInsertSnippet={handleInsertForRow}
+                        showPreview={isPreviewOpen}
+                        onTogglePreview={() =>
+                          setPreviewQuestionIds((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))
+                        }
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDiagramModalState({
+                              idx,
+                              initialMode: 'geometry',
+                              initialTargetField:
+                                focusedMathTarget?.idx === idx
+                                  ? focusedMathTarget.field
+                                  : 'question',
+                              editingToken: null,
+                            })
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 font-bold text-[11px] inline-flex items-center gap-1.5 whitespace-nowrap"
+                        >
+                          <Shapes className="w-3.5 h-3.5" /> Insert Diagram
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDiagramModalState({
+                              idx,
+                              initialMode: 'graph',
+                              initialTargetField:
+                                focusedMathTarget?.idx === idx
+                                  ? focusedMathTarget.field
+                                  : 'question',
+                              editingToken: null,
+                            })
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 font-bold text-[11px] inline-flex items-center gap-1.5 whitespace-nowrap"
+                        >
+                          <LineChart className="w-3.5 h-3.5 text-amber-500" /> Insert Graph / Chart
+                        </button>
+                      </div>
+                    </div>
 
                     <input
                       type="text"
@@ -1068,6 +1257,25 @@ export const PastQuestionsBank: React.FC = () => {
                       className="w-full p-2.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-medium"
                       placeholder="Enter examination question..."
                     />
+                    {hasDiagramTokens(q.question) && (
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <QuestionRichContent
+                          text={q.question}
+                          interactiveZoom
+                          onEditDiagramToken={(token, spec) =>
+                            setDiagramModalState({
+                              idx,
+                              initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                              initialTargetField: 'question',
+                              editingToken: token,
+                            })
+                          }
+                          onRemoveDiagramToken={(token) =>
+                            handleRemovePastPaperDiagram(idx, 'question', token)
+                          }
+                        />
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {(['A', 'B', 'C', 'D'] as const).map((opt) => {
@@ -1119,6 +1327,26 @@ export const PastQuestionsBank: React.FC = () => {
                                   : 'border-slate-300 dark:border-slate-700'
                               }`}
                             />
+                            {hasDiagramTokens(q.options[opt]) && (
+                              <div className="pt-1">
+                                <QuestionRichContent
+                                  text={q.options[opt]}
+                                  compact
+                                  interactiveZoom
+                                  onEditDiagramToken={(token, spec) =>
+                                    setDiagramModalState({
+                                      idx,
+                                      initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                                      initialTargetField: opt,
+                                      editingToken: token,
+                                    })
+                                  }
+                                  onRemoveDiagramToken={(token) =>
+                                    handleRemovePastPaperDiagram(idx, opt, token)
+                                  }
+                                />
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -1144,7 +1372,37 @@ export const PastQuestionsBank: React.FC = () => {
                       </div>
                     </div>
 
-                    {isPreviewOpen && <QuestionMathPreview question={q} showExplanation />}
+                    {isPreviewOpen && (
+                      hasDiagramTokens(q.question) ||
+                      hasDiagramTokens(q.explanation) ||
+                      (['A', 'B', 'C', 'D'] as const).some((o) => hasDiagramTokens(q.options[o])) ? (
+                        <React.Suspense
+                          fallback={
+                            <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs text-slate-500">
+                              Loading diagram preview...
+                            </div>
+                          }
+                        >
+                          <QuestionDiagramPreviewCard
+                            question={q}
+                            showExplanation
+                            onEditDiagramToken={(field, token, spec) =>
+                              setDiagramModalState({
+                                idx,
+                                initialMode: spec.mode === 'geometry' ? 'geometry' : 'graph',
+                                initialTargetField: field,
+                                editingToken: token,
+                              })
+                            }
+                            onRemoveDiagramToken={(field, token) =>
+                              handleRemovePastPaperDiagram(idx, field, token)
+                            }
+                          />
+                        </React.Suspense>
+                      ) : (
+                        <QuestionMathPreview question={q} showExplanation />
+                      )
+                    )}
                   </div>
                 );
               })}
@@ -1199,6 +1457,31 @@ export const PastQuestionsBank: React.FC = () => {
         message="Are you sure you want to delete this past question paper from the archive?"
         itemName={examToDelete ? examToDelete.title : undefined}
       />
+
+      {/* Lazy-Loaded Geometry, Diagram & Graph Builder Modal */}
+      {diagramModalState && formQuestions[diagramModalState.idx] && (
+        <React.Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-slate-950/75 flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl px-6 py-4 text-xs font-bold text-slate-700 dark:text-slate-200 shadow-xl">
+                Loading Geometry, Diagram &amp; Graph Builder...
+              </div>
+            </div>
+          }
+        >
+          <DiagramAndGraphBuilderModal
+            isOpen={true}
+            initialMode={diagramModalState.initialMode}
+            question={formQuestions[diagramModalState.idx]}
+            questionNumber={diagramModalState.idx + 1}
+            initialTargetField={diagramModalState.initialTargetField}
+            editingToken={diagramModalState.editingToken}
+            allowExplanationTarget
+            onClose={() => setDiagramModalState(null)}
+            onSaveDiagram={handleSavePastPaperDiagram}
+          />
+        </React.Suspense>
+      )}
     </div>
   );
 };

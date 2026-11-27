@@ -12,6 +12,8 @@ import {
   summarizeSubmissionReadiness,
 } from '../../lib/cbtReliability';
 import { MathText } from '../common/MathText';
+import { QuestionRichContent } from '../common/QuestionRichContent';
+import { hasDiagramTokens } from '../../lib/diagramFormatting';
 import { formatFriendlyNetworkError } from '../../lib/pwaProtection';
 import {
   Clock,
@@ -623,7 +625,12 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                   >
                     <div className="flex justify-between items-start gap-4">
                       <span className="font-bold text-sm text-slate-200 min-w-0 flex-1">
-                        Q{idx + 1}. <MathText text={item.question} />
+                        Q{idx + 1}.{' '}
+                        {hasDiagramTokens(item.question) ? (
+                          <QuestionRichContent text={item.question} interactiveZoom />
+                        ) : (
+                          <MathText text={item.question} />
+                        )}
                       </span>
                       <span
                         className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${
@@ -650,7 +657,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                         >
                           <span className="flex-shrink-0">{opt}.</span>
                           <span className="min-w-0 flex-1">
-                            <MathText text={item.options[opt]} />
+                            {hasDiagramTokens(item.options[opt]) ? (
+                              <QuestionRichContent text={item.options[opt]} compact interactiveZoom />
+                            ) : (
+                              <MathText text={item.options[opt]} />
+                            )}
                           </span>
                         </div>
                       ))}
@@ -659,7 +670,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                     {item.explanation && (
                       <div className="p-3 bg-slate-800/70 border border-slate-700 rounded-xl text-xs text-amber-200">
                         <strong className="text-amber-400">Explanation:</strong>{' '}
-                        <MathText text={item.explanation} />
+                        {hasDiagramTokens(item.explanation) ? (
+                          <QuestionRichContent text={item.explanation} compact interactiveZoom />
+                        ) : (
+                          <MathText text={item.explanation} />
+                        )}
                       </div>
                     )}
                   </div>
@@ -739,7 +754,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
               </div>
 
               <h3 className="font-serif font-bold text-lg sm:text-xl text-white leading-relaxed min-w-0">
-                <MathText text={currentQ.question} />
+                {hasDiagramTokens(currentQ.question) ? (
+                  <QuestionRichContent text={currentQ.question} interactiveZoom />
+                ) : (
+                  <MathText text={currentQ.question} />
+                )}
               </h3>
 
               {/* Options Selection */}
@@ -769,7 +788,11 @@ export const CBTExamRunner: React.FC<CBTExamRunnerProps> = ({ session, student, 
                         {opt}
                       </span>
                       <span className="min-w-0 flex-1 overflow-x-auto">
-                        <MathText text={currentQ.options[opt]} />
+                        {hasDiagramTokens(currentQ.options[opt]) ? (
+                          <QuestionRichContent text={currentQ.options[opt]} compact interactiveZoom />
+                        ) : (
+                          <MathText text={currentQ.options[opt]} />
+                        )}
                       </span>
                     </button>
                   );
